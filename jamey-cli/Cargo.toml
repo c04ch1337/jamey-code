@@ -1,0 +1,40 @@
+[package]
+name = "jamey-cli"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jamey Milner"]
+description = "Command-line interface for Digital Twin Jamey"
+
+[[bin]]
+name = "jamey"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Local dependencies
+jamey-core = { path = "../jamey-core" }
+jamey-providers = { path = "../jamey-providers" }
+jamey-runtime = { path = "../jamey-runtime" }
+jamey-tools = { path = "../jamey-tools" }
+jamey-protocol = { path = "../jamey-protocol" }
+
+# CLI-specific dependencies
+clap = { version = "4.0", features = ["derive", "env"] }
+crossterm = "0.27"
+colored = "2.0"
+dialoguer = "0.11"
+indicatif = "0.17"
+dirs = "5.0"
+
+[dev-dependencies]
+tempfile = "3.8"
+assert_cmd = "2.0"

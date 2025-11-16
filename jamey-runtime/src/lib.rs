@@ -39,7 +39,7 @@ impl Runtime {
         config.validate()?;
 
         // Initialize logging
-        let subscriber = FmtSubscriber::builder()
+        FmtSubscriber::builder()
             .with_max_level(match config.api.log_level.as_str() {
                 "debug" => Level::DEBUG,
                 "info" => Level::INFO,

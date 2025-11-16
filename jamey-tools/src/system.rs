@@ -1,10 +1,9 @@
 use anyhow::Result;
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sysinfo::{ProcessExt, System, SystemExt};
+use sysinfo::{PidExt, ProcessExt, System, SystemExt};
 use thiserror::Error;
-use tracing::{debug, error, info};
+use tracing::error;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -62,7 +61,7 @@ impl ProcessTool {
 
     pub fn kill_process(&mut self, pid: u32) -> Result<(), SystemToolError> {
         self.system.refresh_all();
-        if let Some(process) = self.system.process(sysinfo::Pid::from(pid)) {
+        if let Some(process) = self.system.process(sysinfo::Pid::from(pid as usize)) {
             if process.kill() {
                 Ok(())
             } else {
@@ -75,7 +74,7 @@ impl ProcessTool {
 
     pub fn get_process_info(&mut self, pid: u32) -> Result<ProcessInfo, SystemToolError> {
         self.system.refresh_all();
-        if let Some(process) = self.system.process(sysinfo::Pid::from(pid)) {
+        if let Some(process) = self.system.process(sysinfo::Pid::from(pid as usize)) {
             Ok(ProcessInfo {
                 pid: process.pid().as_u32(),
                 name: process.name().to_string(),
@@ -102,42 +101,45 @@ impl RegistryTool {
 
     pub fn read_value(&self, key: &str, value_name: &str) -> Result<String, SystemToolError> {
         use windows::Win32::System::Registry::*;
-        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::WIN32_ERROR;
 
         unsafe {
-            let hkey = RegOpenKeyExW(
+            let mut key_handle = HKEY::default();
+            let result = RegOpenKeyExW(
                 HKEY_LOCAL_MACHINE,
                 &windows::core::HSTRING::from(key),
                 0,
                 KEY_READ,
-                std::ptr::null_mut(),
+                &mut key_handle,
             );
 
-            match hkey {
-                Ok(key_handle) => {
-                    let mut buffer = [0u16; 1024];
-                    let mut size = buffer.len() as u32;
-
-                    match RegQueryValueExW(
-                        key_handle,
-                        &windows::core::HSTRING::from(value_name),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        buffer.as_mut_ptr() as *mut u8,
-                        &mut size,
-                    ) {
-                        Ok(_) => {
-                            RegCloseKey(key_handle);
-                            Ok(String::from_utf16_lossy(&buffer[..(size as usize / 2)]))
-                        }
-                        Err(e) => {
-                            RegCloseKey(key_handle);
-                            Err(SystemToolError::Registry(e.to_string()))
-                        }
-                    }
-                }
-                Err(e) => Err(SystemToolError::Registry(e.to_string())),
+            if result != WIN32_ERROR(0) {
+                return Err(SystemToolError::Registry(format!("Failed to open registry key: {}", result.0)));
             }
+
+            let mut buffer = [0u16; 1024];
+            let mut size = (buffer.len() * 2) as u32;
+
+            let value_name_hstring = windows::core::HSTRING::from(value_name);
+            use windows::core::PCWSTR;
+            let value_name_pcwstr = PCWSTR::from_raw(value_name_hstring.as_ptr());
+            let query_result = RegQueryValueExW(
+                key_handle,
+                value_name_pcwstr,
+                None,
+                None,
+                Some(buffer.as_mut_ptr() as *mut u8),
+                Some(&mut size),
+            );
+
+            RegCloseKey(key_handle);
+
+            if query_result != WIN32_ERROR(0) {
+                return Err(SystemToolError::Registry(format!("Failed to query registry value: {}", query_result.0)));
+            }
+
+            let string_len = (size as usize / 2).min(buffer.len());
+            Ok(String::from_utf16_lossy(&buffer[..string_len]).trim_end_matches('\0').to_string())
         }
     }
 }

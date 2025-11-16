@@ -1,15 +1,13 @@
 use crate::config::RuntimeConfig;
 use anyhow::Result;
 use dashmap::DashMap;
-use jamey_core::memory::{Memory, MemoryStore, PostgresMemoryStore};
-use jamey_providers::openrouter::{LlmProvider, OpenRouterProvider};
+use jamey_core::memory::{Memory, PostgresMemoryStore};
+use jamey_providers::openrouter::OpenRouterProvider;
 use jamey_tools::system::{ProcessTool, SelfModifyTool};
-use parking_lot::RwLock;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::broadcast;
-use tower::limit::RateLimit;
-use tracing::{debug, error, info};
+use tracing::error;
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -32,7 +30,7 @@ pub struct SessionManager {
     config: Arc<RuntimeConfig>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Session {
     pub id: Uuid,
     pub memory_context: Vec<Memory>,
@@ -62,7 +60,7 @@ impl SessionManager {
 
     pub fn get_session(&self, id: Uuid) -> Option<Session> {
         self.sessions.get(&id).map(|s| {
-            let mut session = s.clone();
+            let mut session = (*s.value()).clone();
             session.last_activity = std::time::Instant::now();
             session
         })

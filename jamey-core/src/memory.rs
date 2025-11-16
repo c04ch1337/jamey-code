@@ -2,11 +2,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use deadpool_postgres::Pool;
-use pgvector::Vector;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio_postgres::types::Type;
-use tracing::{debug, error, info};
+use tracing::error;
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -28,6 +26,18 @@ pub enum MemoryType {
     Experience,
     Skill,
     Preference,
+}
+
+impl std::fmt::Display for MemoryType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MemoryType::Conversation => write!(f, "Conversation"),
+            MemoryType::Knowledge => write!(f, "Knowledge"),
+            MemoryType::Experience => write!(f, "Experience"),
+            MemoryType::Skill => write!(f, "Skill"),
+            MemoryType::Preference => write!(f, "Preference"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +68,11 @@ pub struct PostgresMemoryStore {
 impl PostgresMemoryStore {
     pub async fn new(pool: Pool, vector_dim: usize) -> Result<Self> {
         let client = pool.get().await?;
+        
+        // Ensure pgvector extension is installed first
+        client
+            .execute("CREATE EXTENSION IF NOT EXISTS vector", &[])
+            .await?;
         
         // Create the memories table if it doesn't exist
         client
@@ -105,16 +120,27 @@ impl MemoryStore for PostgresMemoryStore {
         let client = self.pool.get().await?;
 
         let id = Uuid::new_v4();
+        let memory_type_str = memory.memory_type.to_string();
+        let metadata_json = serde_json::to_value(&memory.metadata)?;
+        
+        // Convert vector to string format for PostgreSQL
+        let embedding_str = format!("[{}]", 
+            memory.embedding.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        
         client
             .execute(
                 "INSERT INTO memories (id, memory_type, content, embedding, metadata)
-                 VALUES ($1, $2, $3, $4, $5)",
+                 VALUES ($1::uuid, $2, $3, $4::vector, $5::jsonb)",
                 &[
                     &id,
-                    &memory.memory_type.to_string(),
+                    &memory_type_str,
                     &memory.content,
-                    &Vector::from(memory.embedding),
-                    &memory.metadata,
+                    &embedding_str,
+                    &metadata_json,
                 ],
             )
             .await?;
@@ -135,13 +161,30 @@ impl MemoryStore for PostgresMemoryStore {
             )
             .await?;
 
-        let embedding: Vector = row.get("embedding");
+        // Get embedding as string and parse it
+        let embedding_str: String = row.get("embedding");
+        let embedding: Vec<f32> = embedding_str
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(',')
+            .map(|s| s.trim().parse().unwrap_or(0.0))
+            .collect();
+
+        let memory_type_str: String = row.get("memory_type");
+        let memory_type = match memory_type_str.as_str() {
+            "Conversation" => MemoryType::Conversation,
+            "Knowledge" => MemoryType::Knowledge,
+            "Experience" => MemoryType::Experience,
+            "Skill" => MemoryType::Skill,
+            "Preference" => MemoryType::Preference,
+            _ => MemoryType::Conversation,
+        };
 
         Ok(Memory {
             id: row.get("id"),
-            memory_type: serde_json::from_value(row.get("memory_type"))?,
+            memory_type,
             content: row.get("content"),
-            embedding: embedding.into(),
+            embedding,
             metadata: row.get("metadata"),
             created_at: row.get("created_at"),
             last_accessed: row.get("last_accessed"),
@@ -152,25 +195,51 @@ impl MemoryStore for PostgresMemoryStore {
         self.validate_vector_dimension(&query_embedding)?;
         let client = self.pool.get().await?;
 
+        // Convert query embedding to string format
+        let query_embedding_str = format!("[{}]", 
+            query_embedding.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        
         let rows = client
             .query(
                 "SELECT id, memory_type, content, embedding, metadata, created_at, last_accessed,
-                        embedding <=> $1 as distance
+                        embedding <=> $1::vector as distance
                  FROM memories
                  ORDER BY distance
                  LIMIT $2",
-                &[&Vector::from(query_embedding), &(limit as i64)],
+                &[&query_embedding_str, &(limit as i64)],
             )
             .await?;
 
         let mut memories = Vec::with_capacity(rows.len());
         for row in rows {
-            let embedding: Vector = row.get("embedding");
+            // Get embedding as string and parse it
+            let embedding_str: String = row.get("embedding");
+            let embedding: Vec<f32> = embedding_str
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .split(',')
+                .map(|s| s.trim().parse().unwrap_or(0.0))
+                .collect();
+            
+            let memory_type_str: String = row.get("memory_type");
+            let memory_type = match memory_type_str.as_str() {
+                "Conversation" => MemoryType::Conversation,
+                "Knowledge" => MemoryType::Knowledge,
+                "Experience" => MemoryType::Experience,
+                "Skill" => MemoryType::Skill,
+                "Preference" => MemoryType::Preference,
+                _ => MemoryType::Conversation,
+            };
+            
             memories.push(Memory {
                 id: row.get("id"),
-                memory_type: serde_json::from_value(row.get("memory_type"))?,
+                memory_type,
                 content: row.get("content"),
-                embedding: embedding.into(),
+                embedding,
                 metadata: row.get("metadata"),
                 created_at: row.get("created_at"),
                 last_accessed: row.get("last_accessed"),
@@ -184,12 +253,20 @@ impl MemoryStore for PostgresMemoryStore {
         self.validate_vector_dimension(&embedding)?;
         let client = self.pool.get().await?;
 
+        // Convert embedding to string format
+        let embedding_str = format!("[{}]", 
+            embedding.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        
         let rows_affected = client
             .execute(
                 "UPDATE memories 
-                 SET content = $2, embedding = $3, last_accessed = NOW()
+                 SET content = $2, embedding = $3::vector, last_accessed = NOW()
                  WHERE id = $1",
-                &[&id, &content, &Vector::from(embedding)],
+                &[&id, &content, &embedding_str],
             )
             .await?;
 

@@ -4,8 +4,12 @@
 //! It includes PostgreSQL-backed vector storage with similarity search capabilities.
 
 pub mod memory;
+pub mod cache;
+pub mod cached_memory;
 
 pub use memory::{Memory, MemoryError, MemoryStore, MemoryType, PostgresMemoryStore};
+pub use cache::{CacheManager, CacheConfig, CacheError, CacheBackend, RedisCache, MemoryCache, HybridCache};
+pub use cached_memory::{CachedMemoryStore, AdvancedCachedMemoryStore, CacheStats, InvalidationStrategy};
 
 /// Re-export common types used throughout the crate
 pub mod prelude {

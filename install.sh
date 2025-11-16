@@ -48,7 +48,13 @@ mkdir -p backups
 # Initialize PostgreSQL database
 echo "Setting up PostgreSQL database..."
 if [ "$WINDOWS" = true ]; then
-    PSQL="psql -U postgres"
+    echo "Windows detected. Using PowerShell script for database setup..."
+    echo "Please run: powershell -ExecutionPolicy Bypass -File setup-db.ps1"
+    echo "Or manually run setup-db.ps1 with appropriate parameters"
+    echo ""
+    echo "For automated setup, you can also use:"
+    echo "  powershell -ExecutionPolicy Bypass -File setup-db.ps1 -PostgresPassword 'your_postgres_password'"
+    exit 0
 else
     PSQL="sudo -u postgres psql"
 fi

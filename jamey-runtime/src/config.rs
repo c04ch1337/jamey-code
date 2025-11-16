@@ -1,5 +1,5 @@
 use anyhow::Result;
-use jamey_core::memory::PostgresMemoryStore;
+use jamey_core::cache::CacheConfig;
 use jamey_providers::openrouter::OpenRouterConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -21,6 +21,7 @@ pub enum ConfigError {
 pub struct RuntimeConfig {
     pub project_name: String,
     pub memory: MemoryConfig,
+    pub cache: CacheConfig,
     pub llm: LlmConfig,
     pub api: ApiConfig,
     pub security: SecurityConfig,
@@ -53,9 +54,13 @@ pub struct LlmConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiConfig {
+    pub host: String,
+    pub port: u16,
     pub log_level: String,
     pub allowed_origins: Vec<String>,
     pub enable_cors: bool,
+    pub metrics_port: Option<u16>,
+    pub health_check_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +83,7 @@ impl Default for RuntimeConfig {
         Self {
             project_name: "jamey".to_string(),
             memory: MemoryConfig::default(),
+            cache: CacheConfig::default(),
             llm: LlmConfig::default(),
             api: ApiConfig::default(),
             security: SecurityConfig::default(),
@@ -123,9 +129,13 @@ impl Default for LlmConfig {
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {
+            host: "0.0.0.0".to_string(),
+            port: 3000,
             log_level: "info".to_string(),
             allowed_origins: vec!["http://localhost:3000".to_string()],
             enable_cors: true,
+            metrics_port: Some(9090),
+            health_check_port: Some(8081),
         }
     }
 }
@@ -155,15 +165,17 @@ impl RuntimeConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
         dotenv::dotenv().ok();
 
-        let mut config = config::Config::default();
+        let default_config = config::Config::try_from(&Self::default())?;
+        let env_config = config::Environment::default().separator("__");
         
-        // Add defaults
-        config.merge(config::Config::try_from(&Self::default())?)?;
-        
-        // Override with environment variables
-        config.merge(config::Environment::default().separator("__"))?;
+        let config = config::Config::builder()
+            // Add defaults
+            .add_source(default_config)
+            // Override with environment variables
+            .add_source(env_config)
+            .build()?;
 
-        config.try_into().map_err(ConfigError::Loading)
+        config.try_deserialize().map_err(ConfigError::Loading)
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {

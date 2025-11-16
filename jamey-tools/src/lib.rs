@@ -19,18 +19,18 @@ pub enum ToolError {
 pub mod prelude {
     pub use super::system::{
         FileBackup, ProcessInfo, ProcessTool, SelfModifyTool,
-        #[cfg(windows)]
-        RegistryTool,
     };
+    #[cfg(windows)]
+    pub use super::system::RegistryTool;
     pub use super::ToolError;
 }
 
 /// Re-export main tool implementations
 pub use system::{
     FileBackup, ProcessInfo, ProcessTool, SelfModifyTool,
-    #[cfg(windows)]
-    RegistryTool,
 };
+#[cfg(windows)]
+pub use system::RegistryTool;
 
 #[cfg(test)]
 mod tests {

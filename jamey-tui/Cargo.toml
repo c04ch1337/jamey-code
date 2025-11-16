@@ -1,0 +1,36 @@
+[package]
+name = "jamey-tui"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jamey Milner"]
+description = "Terminal user interface for Digital Twin Jamey"
+
+[[bin]]
+name = "jamey-tui"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# Local dependencies
+jamey-core = { path = "../jamey-core" }
+jamey-providers = { path = "../jamey-providers" }
+jamey-runtime = { path = "../jamey-runtime" }
+jamey-tools = { path = "../jamey-tools" }
+jamey-protocol = { path = "../jamey-protocol" }
+
+# TUI-specific dependencies
+ratatui.workspace = true
+crossterm.workspace = true
+tui-textarea.workspace = true
+arboard.workspace = true
+
+[dev-dependencies]
+tempfile = "3.8"

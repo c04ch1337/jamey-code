@@ -4,7 +4,7 @@ use backoff::ExponentialBackoff;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tiktoken_rs::CoreBPE;
-use tracing::{debug, error, info};
+use tracing::error;
 use url::Url;
 
 #[derive(Debug, Error)]
@@ -107,6 +107,27 @@ pub struct TokenUsage {
     pub total_tokens: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingResponse {
+    pub object: String,
+    pub data: Vec<EmbeddingData>,
+    pub model: String,
+    pub usage: EmbeddingUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingData {
+    pub object: String,
+    pub embedding: Vec<f32>,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingUsage {
+    pub prompt_tokens: u32,
+    pub total_tokens: u32,
+}
+
 pub struct OpenRouterProvider {
     config: OpenRouterConfig,
     client: reqwest::Client,
@@ -150,16 +171,24 @@ impl OpenRouterProvider {
                 .header("Authorization", format!("Bearer {}", self.config.api_key))
                 .json(&request)
                 .send()
-                .await?;
+                .await
+                .map_err(|e| backoff::Error::transient(OpenRouterError::Api(e.to_string())))?;
 
             match response.status() {
-                reqwest::StatusCode::OK => Ok(response.json::<ChatResponse>().await?),
-                reqwest::StatusCode::TOO_MANY_REQUESTS => {
-                    Err(backoff::Error::Transient(OpenRouterError::RateLimit))
+                reqwest::StatusCode::OK => {
+                    response.json::<ChatResponse>()
+                        .await
+                        .map_err(|e| backoff::Error::permanent(OpenRouterError::Api(e.to_string())))
                 }
-                _ => Err(backoff::Error::Permanent(OpenRouterError::Api(
-                    response.text().await?,
-                ))),
+                reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                    Err(backoff::Error::transient(OpenRouterError::RateLimit))
+                }
+                _ => {
+                    let error_text = response.text()
+                        .await
+                        .unwrap_or_else(|e| format!("Failed to read error response: {}", e));
+                    Err(backoff::Error::permanent(OpenRouterError::Api(error_text)))
+                }
             }
         })
         .await?;
@@ -212,23 +241,40 @@ impl LlmProvider for OpenRouterProvider {
     }
 
     async fn get_embedding(&self, text: &str) -> Result<Vec<f32>> {
-        let request = ChatRequest {
-            model: "claude-3-sonnet".to_string(), // Use Claude for embeddings
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: text.to_string(),
-            }],
-            tools: None,
-            tool_choice: None,
-            temperature: Some(0.0),
-            max_tokens: Some(1), // We only need the embedding
-        };
-
-        let response = self.make_request(request).await?;
+        // Use OpenRouter's embedding endpoint
+        let url = self.config.api_base_url.join("embeddings")?;
         
-        // Extract embedding from response
-        // Note: This is a simplified example - actual embedding extraction would depend on the model's response format
-        Ok(vec![0.0; 1536]) // Placeholder - implement actual embedding extraction
+        let embedding_request = serde_json::json!({
+            "model": "openai/text-embedding-ada-002",
+            "input": text
+        });
+
+        let response = self
+            .client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&embedding_request)
+            .send()
+            .await?;
+
+        match response.status() {
+            reqwest::StatusCode::OK => {
+                let embedding_response: EmbeddingResponse = response.json().await?;
+                
+                if let Some(data) = embedding_response.data.first() {
+                    Ok(data.embedding.clone())
+                } else {
+                    Err(OpenRouterError::Api("No embedding data returned".to_string()).into())
+                }
+            }
+            reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                Err(OpenRouterError::RateLimit.into())
+            }
+            _ => {
+                let error_text = response.text().await?;
+                Err(OpenRouterError::Api(error_text).into())
+            }
+        }
     }
 }
 
