@@ -1,0 +1,116 @@
+{
+    "projectDescription": "Jamey Code Digital Twin – Rust workspace (jamey-core, jamey-providers, jamey-tools, jamey-runtime, jamey-cli, jamey-tui) with OpenRouter + Postgres long-term memory and full-system tools.",
+    "rules": [
+      {
+        "scope": "global",
+        "description": "Section 1 – How to apply snippets from Digital_Twin_Jamey.md",
+        "content": [
+          "The project design is defined in docs/Digital_Twin_Jamey.md.",
+          "Whenever the user pastes code blocks from that document, treat fenced code blocks of the form ```<lang>:<path>``` as the full contents of the file at <path>, relative to the repository root.",
+          "Apply the snippets as follows:",
+          "- `toml:Cargo.toml` → ./Cargo.toml (workspace root).",
+          "- `ini:.env.local.example` → ./.env.local.example (environment template).",
+          "- `rust:jamey-providers/src/openrouter.rs` → ./jamey-providers/src/openrouter.rs.",
+          "- `rust:jamey-core/src/memory.rs` → ./jamey-core/src/memory.rs.",
+          "- `rust:jamey-tools/src/system.rs` → ./jamey-tools/src/system.rs.",
+          "- `rust:jamey-runtime/src/state.rs` → ./jamey-runtime/src/state.rs.",
+          "- `rust:jamey-runtime/src/config.rs` → ./jamey-runtime/src/config.rs.",
+          "- `bash:install.sh` → ./install.sh.",
+          "When updating existing files from the design doc, replace the entire file body with the code fence content unless the user explicitly requests a merge or patch."
+        ]
+      },
+      {
+        "scope": "global",
+        "description": "Section 2 – Workspace structure and crate layout",
+        "content": [
+          "This repo is a Rust workspace with multiple crates:",
+          "- jamey-core: core domain (agents, sessions, memory, protocols).",
+          "- jamey-protocol: shared types for messages, tool specs, tool calls.",
+          "- jamey-providers: LLM providers (OpenRouter, OpenAI, etc.).",
+          "- jamey-tools: executable tools (shell, filesystem, process, registry, self-modification).",
+          "- jamey-runtime: daemon / runtime state, HTTP API, configuration.",
+          "- jamey-cli: CLI client for the runtime.",
+          "- jamey-tui: TUI client (ratatui) for the runtime.",
+          "- docs/: design docs (including Digital_Twin_Jamey.md).",
+          "When adding new functionality, prefer adding code to the appropriate crate instead of creating new ad-hoc folders.",
+          "Do not collapse multiple crates into a single binary; maintain a clean separation of concerns between core, providers, tools, runtime, and UIs."
+        ]
+      },
+      {
+        "scope": "path:jamey-core/",
+        "description": "Section 3 – Core, memory, and protocol rules",
+        "content": [
+          "Keep jamey-core free of UI and OS-specific dependencies; it should be portable and testable in isolation.",
+          "All long-term memory behavior must go through jamey-core/src/memory.rs and its public API.",
+          "Do not call SQL directly from UI or runtime code; go through the MemoryManager and other core abstractions.",
+          "When adding new MemoryType variants, update SQL enums, indexes, and any retrieval helpers consistently.",
+          "Preserve the invariant that jamey-core depends only on jamey-protocol (for message types) but not on UI crates or runtime-specific frameworks."
+        ]
+      },
+      {
+        "scope": "path:jamey-providers/",
+        "description": "Section 4 – LLM providers and tool-calling",
+        "content": [
+          "Each provider implementation (e.g., OpenRouterProvider) must implement the shared LlmProvider trait defined in jamey-providers.",
+          "Provider code should focus on HTTP details and response mapping only – avoid embedding business logic or agent orchestration here.",
+          "Support tool-calling by correctly mapping between provider-specific tool formats and the internal ToolSpec and ToolCall structs.",
+          "For OpenRouter: always include correct headers (Authorization, HTTP-Referer, X-Title) and propagate errors with clear messages.",
+          "Avoid duplicating provider logic; share common request/response helpers where reasonable."
+        ]
+      },
+      {
+        "scope": "path:jamey-tools/",
+        "description": "Section 5 – Tools, full system access, and self-modification",
+        "content": [
+          "Tools in jamey-tools expose capabilities like shell commands, filesystem access, process management, registry access (Windows), and self-modification.",
+          "Each tool must implement the shared ExecutableTool/ToolSpec/ToolResult protocol and describe a clear JSON schema for its arguments.",
+          "Keep tools small and focused: one responsibility per tool (ShellTool, FileReadTool, FileWriteTool, ProcessTool, RegistryTool, SelfModifyTool, etc.).",
+          "SelfModifyTool is allowed to read and write this project's source files; it must always create a backup (.bak) before overwriting.",
+          "If adding destructive or sensitive tools, clearly document the impact and make sure configuration flags in RuntimeConfig can disable them."
+        ]
+      },
+      {
+        "scope": "path:jamey-runtime/",
+        "description": "Section 6 – Runtime, config, and security posture",
+        "content": [
+          "RuntimeState is the central owner of session management, agent engine, tool registry, LLM provider, and memory manager.",
+          "Configuration must be represented by RuntimeConfig, broken into LlmConfig, ApiConfig, SecurityConfig, and MemoryConfig.",
+          "Defaults in SecurityConfig are intentionally set to NO GUARDRAILS / FULL ACCESS for Jamey’s local twin; preserve explicit comments and flags so they can be hardened later.",
+          "All full-system-access tools (process, registry, self-modification, filesystem) should be registered in jamey-runtime/src/state.rs, respecting the configured workspace root and security flags.",
+          "Do not embed per-user secrets in Rust code; always read from configuration (runtime.toml, env, or .env.local.example) and keep secret names descriptive."
+        ]
+      },
+      {
+        "scope": "path:jamey-cli/",
+        "description": "Section 7 – CLI behavior",
+        "content": [
+          "The CLI should act as a thin client over the runtime or core APIs – no deep business logic in CLI commands.",
+          "Prefer subcommands like `chat`, `tools`, `sessions`, and `memory` that call into stable APIs.",
+          "When prompting the LLM from CLI, rely on the shared agent/orchestrator logic in jamey-core instead of reinventing prompts in the CLI layer."
+        ]
+      },
+      {
+        "scope": "path:jamey-tui/",
+        "description": "Section 8 – TUI layout (ratatui) and UX",
+        "content": [
+          "TUI layout should keep three main surfaces: Chat, Logs, and File Preview, as defined in the initial implementation.",
+          "Do not put heavy business logic in the TUI; use it as a UI shell around runtime/core APIs.",
+          "Preserve keyboard conventions: Enter to send, Esc to clear input, Ctrl+C to quit; keep hotkeys consistent if new panes are added.",
+          "When showing large text (logs or files), truncate or paginate rather than letting the TUI become unusably slow."
+        ]
+      },
+      {
+        "scope": "global",
+        "description": "Section 9 – Rust style and general coding conventions",
+        "content": [
+          "Use Rust 2021 edition across all crates.",
+          "Favor clarity over cleverness: explicit types, descriptive names, and straightforward control flow.",
+          "Use anyhow + thiserror for error handling; propagate detailed context with .context(...) on external calls.",
+          "Use async/await with Tokio; keep blocking IO out of async contexts.",
+          "Keep modules small and focused; prefer more files over huge monoliths.",
+          "When adding new crates, use workspace dependencies to avoid version drift."
+        ]
+      }
+    ]
+  }
+  

@@ -1,0 +1,38 @@
+[package]
+name = "jamey-runtime"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jamey Milner"]
+description = "Runtime engine for Digital Twin Jamey"
+
+[dependencies]
+# Workspace dependencies
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+config.workspace = true
+dotenv.workspace = true
+
+# Local dependencies
+jamey-core = { path = "../jamey-core" }
+jamey-providers = { path = "../jamey-providers" }
+jamey-tools = { path = "../jamey-tools" }
+
+# Runtime-specific dependencies
+async-trait = "0.1"
+tokio-util = "0.7"
+futures-util = "0.3"
+dashmap = "5.5"  # Thread-safe concurrent HashMap
+parking_lot = "0.12"  # Better Mutex implementation
+uuid = { version = "1.0", features = ["v4", "serde"] }
+once_cell = "1.18"  # Lazy statics
+tower = { version = "0.4", features = ["limit"] }  # Rate limiting
+metrics = "0.21"  # Runtime metrics
+metrics-exporter-prometheus = "0.12"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "test-util"] }
+tempfile = "3.8"

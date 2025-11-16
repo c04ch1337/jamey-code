@@ -1,0 +1,28 @@
+[package]
+name = "jamey-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jamey Milner"]
+description = "Core functionality for Digital Twin Jamey"
+
+[dependencies]
+# Workspace dependencies
+tokio-postgres.workspace = true
+postgres-types.workspace = true
+deadpool-postgres.workspace = true
+tokio.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+# Crate-specific dependencies
+pgvector = "0.3"  # PostgreSQL vector operations
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "test-util"] }
