@@ -29,23 +29,29 @@ pub async fn run_init(dir: PathBuf, force: bool) -> Result<()> {
         return Ok(());
     }
     
-    // Write default configuration
-    let default_config = r#"[database]
-url = "postgresql://username:password@localhost:5432/jamey"
+    // Write default configuration (NO SECRETS - use environment variables)
+    let default_config = r#"# Jamey CLI Configuration
+# 
+# SECURITY: Never store API keys or passwords in this file!
+# Use environment variables instead:
+#   - JAMEY_API_KEY or OPENROUTER_API_KEY for API authentication
+#   - Database credentials should be in environment variables or .env file
 
 [llm]
 provider = "openrouter"
 model = "claude-3-sonnet"
-openrouter_api_key = "your_api_key_here"
-
-[security]
-api_key_required = true
-api_key = "your_api_key_here"
+# openrouter_api_key is loaded from OPENROUTER_API_KEY environment variable
 
 [api]
 host = "127.0.0.1"
 port = 3000
 enable_cors = true
+
+[cli]
+default_model = "claude-3-sonnet"
+runtime_url = "http://localhost:3000"
+timeout_seconds = 30
+verbose = false
 "#;
     
     std::fs::write(&config_file, default_config)?;

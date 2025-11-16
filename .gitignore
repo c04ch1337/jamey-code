@@ -9,6 +9,14 @@ Cargo.lock
 .env.local
 *.env.local
 
+# Configuration files with secrets
+**/.config/jamey/*.toml
+**/.config/jamey/config.toml
+**/.config/jamey/cli.toml
+config/*.toml
+!config/*.example.toml
+!config/*.env.example
+
 # IDE
 .vscode/
 .idea/

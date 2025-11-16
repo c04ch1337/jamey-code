@@ -2,7 +2,7 @@
 //! 
 //! Interactive chat interface for conversing with Jamey
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::*;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent},
@@ -35,7 +35,9 @@ pub async fn run_chat(
     
     // Create or resume session
     let session_id = if let Some(id) = session_id {
-        Uuid::parse_str(&id)?
+        // Validate UUID format
+        crate::utils::validate_uuid(&id)
+            .with_context(|| format!("Invalid session ID format: {}", id))?
     } else {
         runtime.state().session_manager.create_session()
     };
@@ -156,37 +158,74 @@ async fn process_message(
     verbose: bool,
 ) -> Result<jamey_protocol::ProcessMessageResponse> {
     let state = runtime.state();
+    let start_time = std::time::Instant::now();
     
-    // Create process request
-    let request = ProcessMessageRequest {
-        session_id,
-        message: message.clone(),
-        tools: None, // Let runtime decide available tools
-        context: Some(ProcessContext {
-            max_tokens: Some(4000),
-            temperature: Some(0.7),
-            include_memory: true,
-            memory_limit: Some(10),
-            tool_choice: None,
-        }),
-    };
-
     if verbose {
-        debug!("Processing message: {:?}", request);
+        debug!("Processing message for session {}: {}", session_id, message.content);
     }
 
-    // For now, create a mock response since we don't have the full processing pipeline
+    // Get session (should already exist from run_chat)
+    let session = state.session_manager.get_session(session_id)
+        .ok_or_else(|| anyhow::anyhow!("Session not found: {}. Session may have expired.", session_id))?;
+    
+    // Build message history for LLM
+    let mut llm_messages = Vec::new();
+    
+    // Add system message if this is a new conversation
+    if session.memory_context.is_empty() {
+        llm_messages.push(jamey_providers::openrouter::Message {
+            role: "system".to_string(),
+            content: "You are Jamey, a helpful AI assistant. Be concise, accurate, and helpful.".to_string(),
+        });
+    }
+    
+    // Convert protocol messages to provider messages
+    // For now, we'll just send the current message
+    // In a full implementation, we'd include conversation history
+    llm_messages.push(jamey_providers::openrouter::Message {
+        role: match message.role {
+            jamey_protocol::Role::User => "user".to_string(),
+            jamey_protocol::Role::Assistant => "assistant".to_string(),
+            jamey_protocol::Role::System => "system".to_string(),
+            jamey_protocol::Role::Tool => "tool".to_string(),
+        },
+        content: message.content.clone(),
+    });
+    
+    // Create chat request
+    let chat_request = jamey_providers::openrouter::ChatRequest {
+        model: state.config.llm.openrouter_default_model.clone(),
+        messages: llm_messages,
+        tools: None,
+        tool_choice: None,
+        temperature: Some(0.7),
+        max_tokens: Some(4000),
+    };
+    
+    // Call LLM provider
+    let chat_response = state.llm_provider.chat(chat_request).await
+        .with_context(|| "Failed to get response from LLM provider")?;
+    
+    // Extract response
+    let assistant_message = chat_response.choices
+        .first()
+        .and_then(|c| Some(c.message.content.clone()))
+        .unwrap_or_else(|| "No response from LLM".to_string());
+    
+    let processing_time_ms = start_time.elapsed().as_millis() as u64;
+    
+    // Create protocol response
     let response = jamey_protocol::ProcessMessageResponse {
         session_id,
-        message: Message::assistant(format!("I received your message: {}", message.content)),
-        tool_calls: vec![],
+        message: jamey_protocol::Message::assistant(assistant_message),
+        tool_calls: vec![], // TODO: Extract tool calls from response
         tool_results: vec![],
-        memory_entries_added: 0,
-        processing_time_ms: 100,
+        memory_entries_added: 0, // TODO: Store message in memory
+        processing_time_ms,
         usage: jamey_protocol::TokenUsage {
-            prompt_tokens: 50,
-            completion_tokens: 25,
-            total_tokens: 75,
+            prompt_tokens: chat_response.usage.prompt_tokens,
+            completion_tokens: chat_response.usage.completion_tokens,
+            total_tokens: chat_response.usage.total_tokens,
         },
     };
 

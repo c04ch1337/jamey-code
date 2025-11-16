@@ -2,8 +2,11 @@
 //! 
 //! Helper functions for the CLI application
 
+use anyhow::{Context, Result};
 use colored::*;
 use std::io::{self, Write};
+use std::path::PathBuf;
+use uuid::Uuid;
 
 /// Print a formatted header
 pub fn print_header(title: &str) {
@@ -18,14 +21,21 @@ pub fn print_separator() {
 }
 
 /// Prompt user for confirmation
-pub fn confirm(message: &str) -> bool {
+/// 
+/// Returns Ok(true) if user confirms, Ok(false) if user declines,
+/// or Err if there's an I/O error reading input.
+pub fn confirm(message: &str) -> anyhow::Result<bool> {
     print!("{} [y/N]: ", message.yellow());
-    io::stdout().flush().unwrap();
+    io::stdout()
+        .flush()
+        .context("Failed to flush stdout")?;
     
     let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
+    io::stdin()
+        .read_line(&mut input)
+        .context("Failed to read input from stdin")?;
     
-    matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+    Ok(matches!(input.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
 /// Format bytes to human readable size
@@ -57,6 +67,63 @@ pub fn format_duration(seconds: u64) -> String {
     } else {
         format!("{}d {}h {}m", seconds / 86400, (seconds % 86400) / 3600, (seconds % 3600) / 60)
     }
+}
+
+/// Validate and parse a UUID string
+/// 
+/// Returns an error if the string is not a valid UUID format
+pub fn validate_uuid(uuid_str: &str) -> Result<Uuid> {
+    Uuid::parse_str(uuid_str)
+        .with_context(|| format!("Invalid UUID format: {}", uuid_str))
+}
+
+/// Validate a file path to prevent directory traversal attacks
+/// 
+/// Returns an error if the path contains dangerous components like ".."
+pub fn validate_path(path: &PathBuf) -> Result<()> {
+    // Check for directory traversal attempts
+    for component in path.components() {
+        if let std::path::Component::ParentDir = component {
+            return Err(anyhow::anyhow!(
+                "Path contains '..' component - directory traversal not allowed: {}",
+                path.display()
+            ));
+        }
+    }
+    
+    Ok(())
+}
+
+/// Validate a PID value
+/// 
+/// Returns an error if the PID is invalid (e.g., 0 or too large)
+pub fn validate_pid(pid: u32) -> Result<()> {
+    if pid == 0 {
+        return Err(anyhow::anyhow!("Invalid PID: 0 (PID 0 is reserved)"));
+    }
+    
+    // On most systems, PIDs are limited to 2^15 - 1 (32767) or 2^22 - 1 (4194303)
+    // We'll use a reasonable upper bound
+    if pid > 10_000_000 {
+        return Err(anyhow::anyhow!("PID value too large: {}", pid));
+    }
+    
+    Ok(())
+}
+
+/// Validate input string length
+/// 
+/// Returns an error if the string exceeds the maximum length
+pub fn validate_input_length(input: &str, max_length: usize, field_name: &str) -> Result<()> {
+    if input.len() > max_length {
+        return Err(anyhow::anyhow!(
+            "{} exceeds maximum length of {} characters (got {})",
+            field_name,
+            max_length,
+            input.len()
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

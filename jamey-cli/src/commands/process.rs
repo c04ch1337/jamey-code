@@ -77,6 +77,21 @@ async fn show_process_info(pid: u32) -> Result<()> {
 
 /// Kill a process
 async fn kill_process(pid: u32, force: bool) -> Result<()> {
+    // Validate PID
+    crate::utils::validate_pid(pid)?;
+    
+    // Require confirmation unless force flag is set
+    if !force {
+        let confirmed = crate::utils::confirm(
+            &format!("Are you sure you want to terminate process {}? This action cannot be undone.", pid)
+        )?;
+        
+        if !confirmed {
+            println!("{} Process termination cancelled.", "ℹ️".blue());
+            return Ok(());
+        }
+    }
+    
     println!("{} {} process PID: {}", 
         "⚠️".yellow(), 
         if force { "Force killing" } else { "Terminating" }, 
