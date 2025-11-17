@@ -25,7 +25,7 @@ deadpool-redis.workspace = true
 regex = "1.10"
 
 # Crate-specific dependencies
-pgvector = "0.3"  # PostgreSQL vector operations
+pgvector = "0.4"  # PostgreSQL vector operations
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 uuid = { version = "1.0", features = ["v4", "serde"] }
