@@ -275,7 +275,7 @@ jobs:
           name: codecov-umbrella
 
       - name: Upload coverage report as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-report
           path: coverage/
@@ -308,7 +308,7 @@ jobs:
         run: cargo bench --workspace --no-fail-fast
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v5
         with:
           name: benchmark-results
           path: target/criterion/
@@ -351,7 +351,7 @@ jobs:
         run: cargo build --workspace --release
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v5
         with:
           name: jamey-binaries
           path: |
