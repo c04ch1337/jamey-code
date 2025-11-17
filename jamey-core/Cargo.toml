@@ -29,7 +29,7 @@ pgvector = "0.3"  # PostgreSQL vector operations
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 uuid = { version = "1.0", features = ["v4", "serde"] }
-lru = "0.12"
+lru = "0.16"
 keyring = "2.0"  # Secure OS keychain integration
 validator = { version = "0.20.0", features = ["derive"] }
 subtle = "2.6.1"
