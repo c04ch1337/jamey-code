@@ -44,7 +44,7 @@ impl RedisCache {
         let client = redis::Client::open(redis_url)
             .map_err(|e| CacheError::Connection(e.to_string()))?;
         
-        let conn = client.get_tokio_connection_manager().await?;
+        let conn = client.get_connection_manager().await?;
         
         info!("Connected to Redis cache with prefix: {}", key_prefix);
         
@@ -79,18 +79,16 @@ impl CacheBackend for RedisCache {
         
         if let Some(ttl) = ttl {
             let ttl_secs = ttl.as_secs();
-            redis::cmd("SETEX")
-                .arg(&formatted_key)
-                .arg(ttl_secs)
-                .arg(&value)
-                .query_async::<_, ()>(&mut self.client.clone())
-                .await?;
+            let mut cmd = redis::cmd("SETEX");
+            cmd.arg(&formatted_key)
+               .arg(ttl_secs)
+               .arg(&value);
+            cmd.query_async(&mut self.client.clone()).await?;
         } else {
-            redis::cmd("SET")
-                .arg(&formatted_key)
-                .arg(&value)
-                .query_async::<_, ()>(&mut self.client.clone())
-                .await?;
+            let mut cmd = redis::cmd("SET");
+            cmd.arg(&formatted_key)
+               .arg(&value);
+            cmd.query_async(&mut self.client.clone()).await?;
         }
         
         Ok(())
@@ -118,10 +116,9 @@ impl CacheBackend for RedisCache {
             .await?;
             
         if !keys.is_empty() {
-            redis::cmd("DEL")
-                .arg(keys)
-                .query_async::<_, ()>(&mut self.client.clone())
-                .await?;
+            let mut cmd = redis::cmd("DEL");
+            cmd.arg(keys);
+            cmd.query_async(&mut self.client.clone()).await?;
         }
         
         Ok(())
@@ -146,15 +143,16 @@ pub struct MemoryCache {
 }
 
 impl MemoryCache {
-    pub fn new(capacity: usize, default_ttl: Duration) -> Self {
+    pub fn new(capacity: usize, default_ttl: Duration) -> Result<Self, CacheError> {
         info!("Creating in-memory cache with capacity: {} and TTL: {:?}", capacity, default_ttl);
         
-        Self {
-            cache: tokio::sync::RwLock::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(capacity).unwrap()
-            )),
+        let non_zero_capacity = std::num::NonZeroUsize::new(capacity)
+            .ok_or_else(|| CacheError::Connection("Cache capacity must be greater than zero".to_string()))?;
+        
+        Ok(Self {
+            cache: tokio::sync::RwLock::new(lru::LruCache::new(non_zero_capacity)),
             default_ttl,
-        }
+        })
     }
 
     async fn cleanup_expired(&self) {
@@ -259,7 +257,7 @@ impl HybridCache {
             None
         };
 
-        let memory = MemoryCache::new(memory_capacity, default_ttl);
+        let memory = MemoryCache::new(memory_capacity, default_ttl)?;
         let fallback_enabled = redis.is_some();
 
         Ok(Self {
@@ -375,6 +373,15 @@ impl HybridCache {
     }
 }
 
+/// Cache statistics
+#[derive(Debug)]
+pub struct CacheStats {
+    pub entries: usize,
+    pub search_entries: usize,
+    pub hit_rate: f64,
+    pub memory_usage_mb: f64,
+}
+
 /// Cache configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheConfig {
@@ -414,6 +421,22 @@ impl CacheManager {
 
         Ok(Self { cache, config })
     }
+
+    /// Get cache statistics
+    pub async fn get_stats(&self) -> Result<CacheStats, CacheError> {
+        Ok(CacheStats {
+            entries: 0, // TODO: Implement actual stats
+            search_entries: 0,
+            hit_rate: 0.0,
+            memory_usage_mb: 0.0,
+        })
+    }
+
+    /// Get access count for a memory entry
+    pub async fn get_access_count(&self, _id: Uuid) -> Result<usize, CacheError> {
+        Ok(0) // TODO: Implement actual access counting
+    }
+
 
     /// Cache a memory entry
     pub async fn cache_memory(&self, memory: &crate::memory::Memory) -> Result<(), CacheError> {

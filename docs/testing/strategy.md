@@ -1,5 +1,7 @@
 # Testing Strategy for Digital Twin Jamey
 
+> **Navigation**: [Documentation Home](../README.md) > [Testing](README.md) > Strategy
+
 ## Build Issues Fixed
 
 The following build issues have been resolved:
@@ -341,4 +343,17 @@ Create test data in `tests/fixtures/`:
 3. **Medium-term (Week 2)**: Performance tests, security tests
 4. **Long-term (Month 1)**: Comprehensive test suite, CI/CD setup
 
+## Related Documentation
+
+- [Testing Best Practices](best-practices.md) - Detailed testing guidelines
+- [Testing Overview](README.md) - Testing documentation hub
+- [Performance Monitoring](../operations/performance-monitoring.md) - Performance testing
+- [Architecture Overview](../architecture/system-overview.md) - System architecture
+
 This testing strategy provides a comprehensive approach to validating the Digital Twin Jamey application across all its components and use cases.
+
+---
+
+**Last Updated**: 2025-11-17
+**Status**: ✅ Complete
+**Category**: Testing

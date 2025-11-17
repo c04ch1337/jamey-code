@@ -25,12 +25,26 @@ Jamey 2.0 serves as:
 - mTLS for all node communication
 - Zero-trust architecture
 
-## Setup
+## Documentation
+
+📚 **[Complete Documentation](docs/README.md)** - Comprehensive guides and references
+
+Quick links:
+- [AI Agent Capabilities](docs/ai-agent/README.md) - Autonomous AI agent features
+- [Getting Started Guide](docs/getting-started/README.md) - Setup and installation
+- [Architecture Overview](docs/architecture/system-overview.md) - System design
+- [Security Guide](docs/security/README.md) - Security and cryptography
+- [Testing Guide](docs/testing/best-practices.md) - Testing practices
+
+## Quick Setup
 
 1. Clone the repository
-2. Copy `.env.local.example` to `.env.local` and configure
-3. Run `cargo build --release`
-4. Execute `cargo run`
+2. Set up PostgreSQL: See [Database Setup](docs/getting-started/database-setup.md)
+3. Copy `.env.local.example` to `.env.local` and configure
+4. Run `cargo build --release`
+5. Execute `cargo run --package jamey-runtime`
+
+For detailed setup instructions, see the [Getting Started Guide](docs/getting-started/README.md).
 
 ## Eternal Promise
 

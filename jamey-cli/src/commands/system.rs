@@ -112,7 +112,7 @@ async fn show_system_info(hardware: bool, network: bool) -> Result<()> {
     let config = CliConfig::load().unwrap_or_default();
     println!("  Default Model: {}", config.default_model);
     println!("  Runtime URL: {}", config.runtime_url);
-    println!("  API Key: {}", if config.api_key.is_some() { "✓ Set" } else { "✗ Not set" });
+    println!("  API Key: {}", if config.api_key.is_some() { "✓ Configured" } else { "✗ Not configured" });
     println!();
     
     Ok(())
@@ -223,7 +223,7 @@ async fn run_config_action(action: ConfigAction) -> Result<()> {
             println!("  Runtime URL: {}", config.runtime_url);
             println!("  Timeout: {} seconds", config.timeout_seconds);
             println!("  Verbose: {}", config.verbose);
-            println!("  API Key: {}", if config.api_key.is_some() { "✓ Set (from environment)" } else { "✗ Not set" });
+            println!("  API Key: {}", if config.api_key.is_some() { "✓ Configured (from environment)" } else { "✗ Not configured" });
             println!();
             
             // Show config file path
@@ -284,10 +284,10 @@ async fn run_config_action(action: ConfigAction) -> Result<()> {
                     println!("{}", config.verbose);
                 }
                 "api_key" => {
-                    if let Some(api_key) = config.api_key {
-                        println!("{}", api_key);
+                    if config.api_key.is_some() {
+                        println!("***REDACTED*** (API keys cannot be displayed for security)");
                     } else {
-                        return Err(anyhow::anyhow!("API key not set. Use environment variables (JAMEY_API_KEY or OPENROUTER_API_KEY)"));
+                        return Err(anyhow::anyhow!("API key not configured. Use environment variables (JAMEY_API_KEY or OPENROUTER_API_KEY)"));
                     }
                 }
                 _ => {

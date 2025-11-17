@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::cache::CacheManager;
-use crate::memory::{Memory, MemoryStore, PostgresMemoryStore};
+use crate::memory::{Memory, MemoryStore, PostgresMemoryStore, MemoryError};
 
 /// Cached memory store that wraps PostgreSQL with caching
 pub struct CachedMemoryStore {
@@ -46,7 +46,7 @@ impl CachedMemoryStore {
         info!("Warming up cache with {} recent memories", limit);
         
         let dummy_embedding = vec![0.0; 1536];
-        let recent_memories = self.postgres_store.search(dummy_embedding, limit).await?;
+        let recent_memories = self.postgres_store.search(&dummy_embedding, limit).await?;
         
         let mut cached_count = 0;
         for memory in recent_memories {
@@ -68,6 +68,36 @@ impl CachedMemoryStore {
             hit_rate: stats.hit_rate,
             memory_usage_mb: stats.memory_usage_mb,
         })
+    }
+
+    fn validate_search_results(results: &[Memory]) -> Result<()> {
+        if results.len() > 1000 {
+            return Err(MemoryError::InvalidRequest("Too many search results".to_string()).into());
+        }
+        
+        for memory in results {
+            // Validate content
+            if memory.content.is_empty() || memory.content.len() > 32768 {
+                return Err(MemoryError::InvalidRequest("Invalid content length in search results".to_string()).into());
+            }
+            
+            // Validate embedding
+            if memory.embedding.is_empty() || memory.embedding.len() > 4096 {
+                return Err(MemoryError::InvalidRequest("Invalid embedding dimension in search results".to_string()).into());
+            }
+            if memory.embedding.iter().any(|x| x.is_nan() || x.is_infinite()) {
+                return Err(MemoryError::InvalidRequest("Invalid embedding values in search results".to_string()).into());
+            }
+            
+            // Validate metadata
+            let metadata_str = serde_json::to_string(&memory.metadata)
+                .map_err(|e| MemoryError::InvalidRequest(format!("Invalid metadata JSON: {}", e)))?;
+            if metadata_str.len() > 16384 {
+                return Err(MemoryError::InvalidRequest("Metadata too large in search results".to_string()).into());
+            }
+        }
+        
+        Ok(())
     }
 }
 
@@ -115,26 +145,50 @@ impl MemoryStore for CachedMemoryStore {
         Ok(memory)
     }
 
-    async fn search(&self, query_embedding: Vec<f32>, limit: usize) -> Result<Vec<Memory>> {
+    async fn search(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<Memory>> {
         debug!("Searching memories with caching, limit: {}", limit);
         
-        // Create a more robust cache key using multiple vector segments
+        // Validate input parameters
+        if query_embedding.is_empty() {
+            return Err(MemoryError::InvalidRequest("Query embedding cannot be empty".to_string()).into());
+        }
+        if query_embedding.iter().any(|x| x.is_nan() || x.is_infinite()) {
+            return Err(MemoryError::InvalidRequest("Query embedding contains invalid values".to_string()).into());
+        }
+        if limit == 0 || limit > 1000 {
+            return Err(MemoryError::InvalidRequest("Invalid limit: must be between 1 and 1000".to_string()).into());
+        }
+
+        // Create a secure cache key using multiple vector segments
         let query_key = {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            use sha2::{Sha256, Digest};
+            let mut hasher = Sha256::new();
+            
+            // Add embedding chunks to hash
             for chunk in query_embedding.chunks(32) {
-                let chunk_hash = chunk.iter()
-                    .map(|x| x.to_bits() as u64)
-                    .fold(0, |acc, x| acc.wrapping_add(x));
-                hasher.write_u64(chunk_hash);
+                let chunk_bytes: Vec<u8> = chunk.iter()
+                    .flat_map(|x| x.to_le_bytes().to_vec())
+                    .collect();
+                hasher.update(&chunk_bytes);
             }
-            format!("search:{}:{}", hasher.finish(), limit)
+            
+            // Add limit to hash
+            hasher.update(&limit.to_le_bytes());
+            
+            // Create final key with prefix
+            format!("search:{:x}:{}", hasher.finalize(), limit)
         };
         
-        // Try cache first
+        // Try cache first with validation
         match self.cache.get_cached_search_results::<Vec<Memory>>(&query_key).await {
             Ok(Some(results)) => {
                 debug!("Cache hit for search query");
-                return Ok(results);
+                // Validate cached results
+                if let Err(e) = Self::validate_search_results(&results) {
+                    warn!("Invalid cached results: {}, falling back to database", e);
+                } else {
+                    return Ok(results);
+                }
             }
             Ok(None) => {
                 debug!("Cache miss for search query");
@@ -147,6 +201,9 @@ impl MemoryStore for CachedMemoryStore {
         // Fallback to PostgreSQL
         let results = self.postgres_store.search(query_embedding, limit).await?;
         
+        // Validate results before caching
+        Self::validate_search_results(&results)?;
+        
         // Cache the search results (shorter TTL for search results)
         if let Err(e) = self.cache.cache_search_results(&query_key, &results).await {
             warn!("Failed to cache search results: {}", e);
@@ -155,11 +212,25 @@ impl MemoryStore for CachedMemoryStore {
         Ok(results)
     }
 
-    async fn update(&self, id: Uuid, content: String, embedding: Vec<f32>) -> Result<()> {
+    async fn update(&self, id: Uuid, content: &str, embedding: &[f32]) -> Result<()> {
         debug!("Updating memory with cache invalidation: {}", id);
         
+        // Validate input
+        if content.is_empty() {
+            return Err(MemoryError::InvalidRequest("Content cannot be empty".to_string()).into());
+        }
+        if content.len() > 32768 {
+            return Err(MemoryError::InvalidRequest("Content too long".to_string()).into());
+        }
+        if embedding.is_empty() {
+            return Err(MemoryError::InvalidRequest("Embedding cannot be empty".to_string()).into());
+        }
+        if embedding.iter().any(|x| x.is_nan() || x.is_infinite()) {
+            return Err(MemoryError::InvalidRequest("Embedding contains invalid values".to_string()).into());
+        }
+        
         // Update in PostgreSQL
-        self.postgres_store.update(id, content.clone(), embedding.clone()).await?;
+        self.postgres_store.update(id, content, embedding).await?;
         
         // Retrieve updated memory and update cache immediately
         match self.postgres_store.retrieve(id).await {
@@ -192,6 +263,14 @@ impl MemoryStore for CachedMemoryStore {
         }
         
         Ok(())
+    }
+
+    async fn list_paginated(&self, limit: usize, offset: usize) -> Result<(Vec<Memory>, i64)> {
+        debug!("Listing memories with pagination (cached): limit={}, offset={}", limit, offset);
+        
+        // Pagination results are not cached as they change frequently
+        // and caching would require complex invalidation logic
+        self.postgres_store.list_paginated(limit, offset).await
     }
 }
 
@@ -243,7 +322,42 @@ impl AdvancedCachedMemoryStore {
         })
     }
 
+    fn validate_search_results(results: &[Memory]) -> Result<()> {
+        if results.len() > 1000 {
+            return Err(MemoryError::InvalidRequest("Too many search results".to_string()).into());
+        }
+        
+        for memory in results {
+            // Validate content
+            if memory.content.is_empty() || memory.content.len() > 32768 {
+                return Err(MemoryError::InvalidRequest("Invalid content length in search results".to_string()).into());
+            }
+            
+            // Validate embedding
+            if memory.embedding.is_empty() || memory.embedding.len() > 4096 {
+                return Err(MemoryError::InvalidRequest("Invalid embedding dimension in search results".to_string()).into());
+            }
+            if memory.embedding.iter().any(|x| x.is_nan() || x.is_infinite()) {
+                return Err(MemoryError::InvalidRequest("Invalid embedding values in search results".to_string()).into());
+            }
+            
+            // Validate metadata
+            let metadata_str = serde_json::to_string(&memory.metadata)
+                .map_err(|e| MemoryError::InvalidRequest(format!("Invalid metadata JSON: {}", e)))?;
+            if metadata_str.len() > 16384 {
+                return Err(MemoryError::InvalidRequest("Metadata too large in search results".to_string()).into());
+            }
+        }
+        
+        Ok(())
+    }
+
     async fn invalidate_with_strategy(&self, id: Uuid) -> Result<()> {
+        // Validate UUID
+        if id.is_nil() {
+            return Err(MemoryError::InvalidRequest("Invalid UUID".to_string()).into());
+        }
+
         match self.invalidation_strategy {
             InvalidationStrategy::Immediate => {
                 self.inner.invalidate_cache(id).await?;
@@ -305,11 +419,11 @@ impl MemoryStore for AdvancedCachedMemoryStore {
         self.inner.retrieve(id).await
     }
 
-    async fn search(&self, query_embedding: Vec<f32>, limit: usize) -> Result<Vec<Memory>> {
+    async fn search(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<Memory>> {
         self.inner.search(query_embedding, limit).await
     }
 
-    async fn update(&self, id: Uuid, content: String, embedding: Vec<f32>) -> Result<()> {
+    async fn update(&self, id: Uuid, content: &str, embedding: &[f32]) -> Result<()> {
         // Update in database first
         self.inner.postgres_store.update(id, content, embedding).await?;
         
@@ -328,6 +442,10 @@ impl MemoryStore for AdvancedCachedMemoryStore {
         
         Ok(())
     }
+
+    async fn list_paginated(&self, limit: usize, offset: usize) -> Result<(Vec<Memory>, i64)> {
+        self.inner.list_paginated(limit, offset).await
+    }
 }
 
 #[cfg(test)]
@@ -344,7 +462,8 @@ mod tests {
         cfg.dbname = Some("jamey_test".to_string());
         cfg.user = Some("jamey".to_string());
         cfg.password = Some("test_password".to_string());
-
+        log::info!("Connecting to test database with configured credentials");
+        
         let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls)
             .map_err(|e| format!("Failed to create connection pool: {}", e))?;
         let postgres_store = PostgresMemoryStore::new(pool, 1536).await?;
@@ -354,6 +473,7 @@ mod tests {
             memory_capacity: 100,
             default_ttl_seconds: 60,
             enable_fallback: false,
+            key_prefix: "test".to_string(),
         };
 
         let store = AdvancedCachedMemoryStore::new(
@@ -390,7 +510,7 @@ mod tests {
         assert_eq!(retrieved2.content, memory.content);
         
         // Update memory
-        store.update(id, "Updated content".to_string(), vec![0.2; 1536]).await?;
+        store.update(id, "Updated content", &vec![0.2; 1536]).await?;
         
         // Retrieve updated memory
         let updated = store.retrieve(id).await?;

@@ -12,6 +12,7 @@ async fn setup_test_environment() -> Result<(App, TempDir)> {
     let mut config = RuntimeConfig::default();
     
     config.project_name = "tui_test".to_string();
+    // Test secrets - do not use in production
     config.memory.postgres_password = "test_password".to_string();
     config.llm.openrouter_api_key = "test_key".to_string();
     config.tools.backup_dir = temp_dir.path().to_path_buf();

@@ -234,6 +234,7 @@ async fn test_openrouter_streaming() -> Result<()> {
 #[tokio::test]
 async fn test_openrouter_integration_with_runtime() -> Result<()> {
     let mut config = RuntimeConfig::default();
+    // Test secret - do not use in production
     config.llm.openrouter_api_key = "test_key".to_string();
     
     let runtime = Runtime::new(config).await?;

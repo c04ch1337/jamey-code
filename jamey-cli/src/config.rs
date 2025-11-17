@@ -56,12 +56,20 @@ impl CliConfig {
         
         // ALWAYS load API key from environment variable (never from file)
         config.api_key = std::env::var("JAMEY_API_KEY")
+            .map(|key| {
+                log::info!("Loaded JAMEY_API_KEY from environment");
+                key
+            })
             .ok()
             .filter(|s| !s.is_empty());
         
         // Also check for OpenRouter API key (common case)
         if config.api_key.is_none() {
             config.api_key = std::env::var("OPENROUTER_API_KEY")
+                .map(|key| {
+                    log::info!("Loaded OPENROUTER_API_KEY from environment");
+                    key
+                })
                 .ok()
                 .filter(|s| !s.is_empty());
         }

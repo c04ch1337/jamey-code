@@ -1,5 +1,5 @@
 //! Protocol definitions for Digital Twin Jamey
-//! 
+//!
 //! This crate provides the core data structures, enums, and traits
 //! that define the communication protocol between Jamey components.
 
@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
+use validator::{Validate, ValidationError};
 
 #[derive(Debug, Error)]
 pub enum ProtocolError {
@@ -30,13 +31,48 @@ pub enum Role {
 }
 
 /// A message in a conversation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct Message {
+    #[serde(default = "Uuid::new_v4")]
     pub id: Uuid,
     pub role: Role,
+    #[validate(length(min = 1, max = 32768))]
     pub content: String,
+    #[serde(default = "Utc::now")]
     pub timestamp: DateTime<Utc>,
+    #[validate(custom(function = "validate_metadata"))]
+    #[serde(default = "default_metadata")]
     pub metadata: serde_json::Value,
+}
+
+fn default_metadata() -> serde_json::Value {
+    serde_json::json!({})
+}
+
+fn validate_metadata(metadata: &serde_json::Value) -> Result<(), ValidationError> {
+    let serialized = serde_json::to_string(metadata)
+        .map_err(|_e| ValidationError::new("invalid_json"))?;
+    
+    if serialized.len() > 16384 {
+        return Err(ValidationError::new("metadata_too_large"));
+    }
+    
+    if let Some(obj) = metadata.as_object() {
+        if obj.len() > 50 {
+            return Err(ValidationError::new("too_many_fields"));
+        }
+        for (key, value) in obj {
+            if key.len() > 64 {
+                return Err(ValidationError::new("key_too_long"));
+            }
+            if let Some(s) = value.as_str() {
+                if s.len() > 1024 {
+                    return Err(ValidationError::new("value_too_long"));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Message {
@@ -68,19 +104,51 @@ impl Message {
 }
 
 /// Tool specification for function calling
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct ToolSpec {
+    #[validate(length(min = 1, max = 64))]
     pub name: String,
+    #[validate(length(min = 1, max = 512))]
     pub description: String,
+    #[validate(custom(function = "validate_tool_parameters"))]
     pub parameters: serde_json::Value,
 }
 
+fn validate_tool_parameters(params: &serde_json::Value) -> Result<(), ValidationError> {
+    let serialized = serde_json::to_string(params)
+        .map_err(|_e| ValidationError::new("invalid_json"))?;
+    
+    if serialized.len() > 8192 {
+        return Err(ValidationError::new("parameters_too_large"));
+    }
+    
+    if let Some(obj) = params.as_object() {
+        if obj.len() > 50 {
+            return Err(ValidationError::new("too_many_parameters"));
+        }
+    }
+    Ok(())
+}
+
 /// Tool call from LLM
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct ToolCall {
+    #[validate(length(min = 1, max = 64))]
     pub id: String,
+    #[validate(length(min = 1, max = 64))]
     pub name: String,
+    #[validate(custom(function = "validate_tool_args"))]
     pub args: serde_json::Value,
+}
+
+fn validate_tool_args(args: &serde_json::Value) -> Result<(), ValidationError> {
+    let serialized = serde_json::to_string(args)
+        .map_err(|_e| ValidationError::new("invalid_json"))?;
+    
+    if serialized.len() > 16384 {
+        return Err(ValidationError::new("arguments_too_large"));
+    }
+    Ok(())
 }
 
 /// Tool execution result
@@ -131,12 +199,38 @@ pub struct SessionState {
 }
 
 /// Request to create a new session
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CreateSessionRequest {
     pub user_id: Option<String>,
     pub initial_context: Option<String>,
+    #[validate(length(min = 0, max = 100))]
     pub tool_preferences: Vec<String>,
+    #[validate(custom(function = "validate_metadata"))]
+    #[serde(default = "default_metadata")]
     pub metadata: serde_json::Value,
+}
+
+fn validate_optional_user_id(user_id: &String) -> Result<(), ValidationError> {
+    if !user_id.is_empty() {
+        let id = user_id;
+        if id.is_empty() || id.len() > 64 {
+            return Err(ValidationError::new("invalid_user_id_length"));
+        }
+        if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return Err(ValidationError::new("invalid_user_id_format"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_optional_context(context: &String) -> Result<(), ValidationError> {
+    if !context.is_empty() {
+        let ctx = context;
+        if ctx.len() > 32768 {
+            return Err(ValidationError::new("context_too_large"));
+        }
+    }
+    Ok(())
 }
 
 /// Response for session creation
@@ -156,13 +250,33 @@ pub struct ProcessMessageRequest {
 }
 
 /// Additional context for message processing
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct ProcessContext {
+    #[validate(range(min = 1, max = 32768))]
     pub max_tokens: Option<u32>,
+    #[validate(range(min = 0.0, max = 2.0))]
     pub temperature: Option<f32>,
+    #[serde(default = "default_include_memory")]
     pub include_memory: bool,
+    #[validate(range(min = 1, max = 1000))]
     pub memory_limit: Option<u32>,
     pub tool_choice: Option<String>,
+}
+
+fn default_include_memory() -> bool {
+    true
+}
+
+fn validate_tool_choice(choice: &String) -> Result<(), ValidationError> {
+    if !choice.is_empty() {
+        if choice != "auto" && choice != "none" && !choice.starts_with("function:") {
+            return Err(ValidationError::new("invalid_tool_choice_format"));
+        }
+        if choice.len() > 100 {
+            return Err(ValidationError::new("tool_choice_too_long"));
+        }
+    }
+    Ok(())
 }
 
 /// Response for message processing
@@ -207,8 +321,29 @@ pub struct ComponentStatus {
 
 /// Trait for protocol handlers
 pub trait ProtocolHandler {
-    fn handle_message(&self, message: &str) -> Result<String, ProtocolError>;
-    fn validate_message(&self, message: &str) -> Result<(), ProtocolError>;
+    fn handle_message(&self, message: &str) -> Result<String, ProtocolError> {
+        // Validate message first
+        self.validate_message(message)?;
+        
+        // Handle message implementation
+        Ok(String::new())
+    }
+
+    fn validate_message(&self, message: &str) -> Result<(), ProtocolError> {
+        // Basic message validation
+        if message.is_empty() {
+            return Err(ProtocolError::Validation("Empty message".to_string()));
+        }
+        if message.len() > 65536 {
+            return Err(ProtocolError::Validation("Message too large".to_string()));
+        }
+        
+        // Try to parse as JSON
+        serde_json::from_str::<serde_json::Value>(message)
+            .map_err(|e| ProtocolError::InvalidFormat(format!("Invalid JSON: {}", e)))?;
+        
+        Ok(())
+    }
 }
 
 /// Trait for session management

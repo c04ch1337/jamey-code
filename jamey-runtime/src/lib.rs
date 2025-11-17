@@ -5,6 +5,10 @@
 
 pub mod config;
 pub mod state;
+pub mod scheduler;
+pub mod hybrid_orchestrator;
+pub mod service;
+pub mod tls;
 
 use anyhow::Result;
 use config::{ConfigError, RuntimeConfig};
@@ -65,8 +69,12 @@ impl Runtime {
         let state = RuntimeState::new(config).await?;
         let shutdown_rx = state.shutdown_signal.subscribe();
 
+        tracing::debug!("Creating Runtime state Arc");
+        let state_arc = Arc::new(state);
+        tracing::debug!("Runtime state Arc strong count: {}", Arc::strong_count(&state_arc));
+        
         Ok(Self {
-            state: Arc::new(state),
+            state: state_arc,
             shutdown_rx,
         })
     }
@@ -77,6 +85,7 @@ impl Runtime {
 
         // Start session cleanup task
         let session_manager = self.state.session_manager.clone();
+        tracing::debug!("Cloned session_manager Arc for cleanup task, strong count: {}", Arc::strong_count(&session_manager));
         let mut cleanup_interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 minutes
         let mut shutdown_rx = self.shutdown_rx.resubscribe();
 
@@ -120,6 +129,10 @@ pub mod prelude {
         ApiConfig, ConfigError, LlmConfig, MemoryConfig, RuntimeConfig, SecurityConfig, ToolConfig,
     };
     pub use super::state::{RuntimeError, RuntimeState, Session, SessionManager, ToolRegistry};
+    pub use super::service::{JameyService, ServiceStatus};
+    pub use super::tls::{
+        FrameOptions, SecurityHeaders, TlsConfig, TlsError, TlsVersion,
+    };
     pub use super::{Error, Runtime};
 }
 
@@ -133,9 +146,13 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let mut config = RuntimeConfig::default();
         config.tools.backup_dir = temp_dir.path().to_path_buf();
-        config.memory.postgres_password = "test_password".to_string();
-        config.llm.openrouter_api_key = "test_key".to_string();
-
+        config.tools.download_dir = temp_dir.path().join("downloads");
+        config.tools.system_root = temp_dir.path().to_path_buf();
+        // Test secrets - do not use in production
+        use tracing_honeycomb::SensitiveValue;
+        config.memory.postgres_password = SensitiveValue("test_password".to_string());
+        config.llm.openrouter_api_key = SensitiveValue("test_key".to_string());
+        
         // Create runtime
         let mut runtime = Runtime::new(config).await?;
         
@@ -171,8 +188,12 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let mut config = RuntimeConfig::default();
         config.tools.backup_dir = temp_dir.path().to_path_buf();
-        config.memory.postgres_password = "test_password".to_string();
-        config.llm.openrouter_api_key = "test_key".to_string();
+        config.tools.download_dir = temp_dir.path().join("downloads");
+        config.tools.system_root = temp_dir.path().to_path_buf();
+        // Test secrets - do not use in production
+        use tracing_honeycomb::SensitiveValue;
+        config.memory.postgres_password = SensitiveValue("test_password".to_string());
+        config.llm.openrouter_api_key = SensitiveValue("test_key".to_string());
         assert!(Runtime::new(config).await.is_ok());
         Ok(())
     }

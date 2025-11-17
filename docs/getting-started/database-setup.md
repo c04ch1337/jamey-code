@@ -1,5 +1,7 @@
 # Database Setup Guide
 
+> **Navigation**: [Documentation Home](../README.md) > [Getting Started](README.md) > Database Setup
+
 This guide helps you set up PostgreSQL with the pgvector extension for Jamey.
 
 ## Quick Start (Windows)
@@ -135,9 +137,21 @@ POSTGRES_MAX_CONNECTIONS=10
 2. Run `cargo run` to start the application
 3. The application will automatically create the required tables on first run
 
+## Related Documentation
+
+- [Getting Started Overview](README.md) - Setup and installation
+- [System Architecture](../architecture/system-overview.md) - Database architecture
+- [Performance Monitoring](../operations/performance-monitoring.md) - Database performance
+
 ## Notes
 
 - The `PostgresMemoryStore::new()` function now automatically creates the `vector` extension if it doesn't exist
 - This prevents freezing when the extension is missing
 - Always use strong passwords in production environments
+
+---
+
+**Last Updated**: 2025-11-17
+**Status**: ✅ Complete
+**Category**: Getting Started
 

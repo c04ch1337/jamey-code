@@ -17,6 +17,9 @@ authors = ["Jamey Milner"]
 description = "Digital Twin Jamey - An AI assistant with system capabilities"
 
 [workspace.dependencies]
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+
 # Database
 tokio-postgres = { version = "0.7", features = ["with-uuid-1", "with-serde_json-1", "with-chrono-0_4"] }
 postgres-types = { version = "0.2", features = ["derive"] }
@@ -44,13 +47,30 @@ anyhow = "1.0"
 # HTTP Client
 reqwest = { version = "0.11", features = ["json"] }
 
+# Web and Network
+urlencoding = "2.1"
+base64 = { version = "0.21", features = ["std"] }
+# TLS/HTTPS Support
+rustls = "0.21"
+tokio-rustls = "0.24"
+rustls-pemfile = "1.0"
+webpki-roots = "0.25"
+
+
+# Scheduling
+cron = "0.12"
+async-trait = "0.1"
+
 # Environment
 dotenv = "0.15"
 config = "0.13"
 
-# Logging
+# Logging and Profiling
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+tracing-honeycomb = "0.4"
+log = "0.4"
 
 # CLI Dependencies
 clap = { version = "4.0", features = ["derive", "env"] }
@@ -66,7 +86,8 @@ tui-textarea = "0.2"
 arboard = "3.2"
 
 # Caching Dependencies
-redis = { version = "0.23", features = ["tokio-comp", "connection-manager"] }
+redis = { version = "0.32", features = ["tokio-comp", "connection-manager"] }
+deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
 lru = "0.12"
 tokio-util = "0.7"
 

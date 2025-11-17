@@ -20,8 +20,29 @@ jamey-core = { path = "../jamey-core" }
 # Cross-platform process management
 sysinfo = "0.29"
 chrono = { version = "0.4", features = ["serde"] }
-async-trait = "0.1"
+async-trait.workspace = true
 glob = "0.3"
+
+# Network and web
+reqwest.workspace = true
+urlencoding.workspace = true
+base64.workspace = true
+url = "2.5"
+
+# MQTT for IoT device communication
+rumqttc = "0.21"
+
+# mDNS for device discovery
+mdns-sd = "0.6"
+
+# TLS support for mTLS in MQTT
+rustls.workspace = true
+rustls-pemfile.workspace = true
+webpki-roots.workspace = true
+tokio-rustls.workspace = true
+
+# UUID for connector IDs
+uuid.workspace = true
 
 # Windows-specific dependencies
 [target.'cfg(windows)'.dependencies]

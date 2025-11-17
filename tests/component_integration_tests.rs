@@ -15,6 +15,7 @@ use utils::{assert_memories_equal, wait_for_condition};
 async fn setup_test_components() -> Result<(Runtime, Arc<State>)> {
     let mut config = RuntimeConfig::default();
     config.project_name = "integration_test".to_string();
+    // Test secrets - do not use in production
     config.memory.postgres_password = "test_password".to_string();
     config.llm.openrouter_api_key = "test_key".to_string();
     config.security.api_key_required = false;

@@ -1,9 +1,12 @@
 //! System tools implementation for Digital Twin Jamey
 //! 
 //! This crate provides system-level tools for process management,
-//! Windows registry access, and self-modification capabilities.
+//! Windows registry access, self-modification capabilities, and
+//! extensible connector architecture for full system access.
 
 pub mod system;
+pub mod connector;
+pub mod connectors;
 
 use thiserror::Error;
 
@@ -22,6 +25,11 @@ pub mod prelude {
     };
     #[cfg(windows)]
     pub use super::system::RegistryTool;
+    pub use super::connector::{
+        Connector, ConnectorRegistry, ConnectorMetadata, ConnectorResult,
+        ExecutionContext, CapabilityLevel, NetworkRequest,
+    };
+    pub use super::connectors::*;
     pub use super::ToolError;
 }
 

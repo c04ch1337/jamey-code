@@ -1,3 +1,11 @@
+# Digital Twin Implementation Notes (Archived)
+
+> **Navigation**: [Documentation Home](../README.md) > [Reference](../README.md#-reference) > Digital Twin Notes
+>
+> **⚠️ ARCHIVED DOCUMENT**: This document contains historical implementation notes and conversations from the initial development phase. It is preserved for reference but may contain outdated information. For current documentation, see the [Architecture Overview](../architecture/system-overview.md).
+
+---
+
 Yes to all your requirements! Let me confirm and implement:
 
 ## ✅ Confirmed Features
@@ -1152,7 +1160,7 @@ root = "/"  # FULL SYSTEM ACCESS
 [llm]
 provider = "openrouter"
 model = "anthropic/claude-3.5-sonnet"
-openrouter_api_key = "your_openrouter_key_here"
+openrouter_api_key = "YOUR_OPENROUTER_API_KEY"
 
 [security]
 enable_guardrails = false  # NO GUARDRAILS

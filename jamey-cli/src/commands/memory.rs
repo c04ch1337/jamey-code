@@ -171,8 +171,12 @@ async fn list_memory(count: usize, detailed: bool) -> Result<()> {
                 println!("  {} Content: {}", "💬".blue(), memory.content);
                 println!("  {} Created: {}", "📅".blue(), memory.created_at.format("%Y-%m-%d %H:%M:%S"));
                 println!("  {} Last Accessed: {}", "🕐".blue(), memory.last_accessed.format("%Y-%m-%d %H:%M:%S"));
-                if !memory.metadata.is_null() && !memory.metadata.as_object().unwrap().is_empty() {
-                    println!("  {} Metadata: {}", "📊".blue(), serde_json::to_string_pretty(&memory.metadata)?);
+                if !memory.metadata.is_null() {
+                    if let Some(obj) = memory.metadata.as_object() {
+                        if !obj.is_empty() {
+                            println!("  {} Metadata: {}", "📊".blue(), serde_json::to_string_pretty(&memory.metadata)?);
+                        }
+                    }
                 }
                 println!();
             } else {

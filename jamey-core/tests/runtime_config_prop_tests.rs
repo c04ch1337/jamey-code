@@ -48,6 +48,7 @@ proptest! {
         
         // Set generated values
         config.project_name = project_name.clone();
+        // Test secret - do not use in production
         config.llm.openrouter_api_key = api_key.clone();
         config.tools.backup_dir = backup_dir.clone();
         config.memory.max_memories = memory_limit;

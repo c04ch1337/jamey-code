@@ -45,12 +45,50 @@ pub struct OpenRouterConfig {
     pub max_retries: u32,
 }
 
+fn validate_api_key(key: &str) -> Result<(), String> {
+    if key.is_empty() {
+        return Err("API key cannot be empty".to_string());
+    }
+    if key.len() > 200 {
+        return Err("API key too long".to_string());
+    }
+    if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err("API key contains invalid characters".to_string());
+    }
+    Ok(())
+}
+
+fn validate_api_url(url: &Url) -> Result<(), String> {
+    if url.scheme() != "https" {
+        return Err("API URL must use HTTPS".to_string());
+    }
+    if url.host_str().is_none() {
+        return Err("API URL must have a host".to_string());
+    }
+    Ok(())
+}
+
+fn validate_model_name(model: &str) -> Result<(), String> {
+    if model.is_empty() {
+        return Err("Model name cannot be empty".to_string());
+    }
+    if model.len() > 50 {
+        return Err("Model name too long".to_string());
+    }
+    if !model.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.') {
+        return Err("Model name contains invalid characters".to_string());
+    }
+    Ok(())
+}
+
 impl Default for OpenRouterConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
+            // This URL is a compile-time constant and will never fail to parse
+            // If it does, it's a programming error that should be caught in tests
             api_base_url: Url::parse("https://openrouter.ai/api/v1")
-                .expect("Default OpenRouter URL should be valid"),
+                .expect("Hardcoded OpenRouter URL must be valid"),
             default_model: "claude-3-sonnet".to_string(),
             allowed_models: vec![
                 "claude-3-sonnet".to_string(),
@@ -69,11 +107,33 @@ pub struct Message {
     pub content: String,
 }
 
+fn validate_role(role: &str) -> Result<(), String> {
+    match role {
+        "system" | "user" | "assistant" | "function" => Ok(()),
+        _ => Err("Invalid role. Must be one of: system, user, assistant, function".to_string())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tool {
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value,
+}
+
+fn validate_tool_parameters(params: &serde_json::Value) -> Result<(), String> {
+    if params.as_object().map_or(0, |obj| obj.len()) > 50 {
+        return Err("Tool parameters object too large".to_string());
+    }
+    
+    let serialized = serde_json::to_string(params)
+        .map_err(|e| format!("Invalid JSON parameters: {}", e))?;
+    
+    if serialized.len() > 8192 {
+        return Err("Tool parameters too large".to_string());
+    }
+    
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +148,30 @@ pub struct ChatRequest {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+}
+
+fn validate_tools(tools: &Option<Vec<Tool>>) -> Result<(), String> {
+    if let Some(tools) = tools {
+        if tools.is_empty() {
+            return Err("Tools array cannot be empty".to_string());
+        }
+        if tools.len() > 20 {
+            return Err("Too many tools specified".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_tool_choice(choice: &Option<String>) -> Result<(), String> {
+    if let Some(choice) = choice {
+        if choice != "auto" && choice != "none" && !choice.starts_with("function:") {
+            return Err("Invalid tool_choice format".to_string());
+        }
+        if choice.len() > 100 {
+            return Err("tool_choice value too long".to_string());
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +242,8 @@ impl OpenRouterProvider {
         if config.allowed_models.is_empty() {
             return Err(OpenRouterError::InvalidRequest("At least one allowed model must be specified".to_string()).into());
         }
+        
+        tracing::info!("Initializing OpenRouter provider with secure configuration");
 
         // Configure secure TLS defaults
         let client = reqwest::Client::builder()
@@ -165,9 +251,8 @@ impl OpenRouterProvider {
             // Enforce minimum TLS version 1.2
             .min_tls_version(reqwest::tls::Version::TLS_1_2)
             // Use native TLS implementation with strong cipher suites
-            .use_native_tls()
             // Enable certificate validation
-            .tls_built_in_root_certs()
+            .tls_built_in_root_certs(true)
             // Set reasonable connection timeouts
             .connect_timeout(std::time::Duration::from_secs(30))
             // Enable HTTP/2 support
@@ -185,7 +270,7 @@ impl OpenRouterProvider {
         })
     }
 
-    fn validate_chat_request(&mut self, request: &mut ChatRequest) -> Result<(), OpenRouterError> {
+    fn validate_chat_request(&self, request: &mut ChatRequest) -> Result<(), OpenRouterError> {
         // Validate and set default model
         if request.model.is_empty() {
             request.model = self.config.default_model.clone();
@@ -270,6 +355,8 @@ impl OpenRouterProvider {
         let url = self.config.api_base_url.join("chat/completions")?;
         let auth_header = format!("Bearer {}", self.config.api_key);
 
+        tracing::debug!("Making chat completion request to OpenRouter API");
+        
         let result = backoff::future::retry(backoff, || async {
             let request_future = self.client
                 .post(url.clone())
@@ -377,6 +464,8 @@ impl LlmProvider for OpenRouterProvider {
 
         // Use OpenRouter's embedding endpoint
         let url = self.config.api_base_url.join("embeddings")?;
+        
+        tracing::debug!("Generating embedding for text");
         
         let embedding_request = serde_json::json!({
             "model": "openai/text-embedding-ada-002",

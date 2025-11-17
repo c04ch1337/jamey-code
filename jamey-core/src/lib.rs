@@ -7,16 +7,23 @@ pub mod memory;
 pub mod cache;
 pub mod cached_memory;
 pub mod pool;
+pub mod secrets;
+pub mod secure_logging;
+pub mod profiling;
 
 pub use memory::{Memory, MemoryError, MemoryStore, MemoryType, PostgresMemoryStore};
 pub use cache::{CacheManager, CacheConfig, CacheError, CacheBackend, RedisCache, MemoryCache, HybridCache};
 pub use cached_memory::{CachedMemoryStore, AdvancedCachedMemoryStore, CacheStats, InvalidationStrategy};
 pub use pool::{ConnectionPools, PoolConfig, PostgresPoolConfig, RedisPoolConfig, HealthStatus, PoolStatus};
+pub use profiling::{TimingGuard, PerformanceThresholds, PerformanceMetrics};
 
 /// Re-export common types used throughout the crate
 pub mod prelude {
     pub use super::memory::{Memory, MemoryError, MemoryStore, MemoryType, PostgresMemoryStore};
     pub use super::pool::{ConnectionPools, PoolConfig, PostgresPoolConfig, RedisPoolConfig};
+    pub use super::secrets::{SecretManager, SecretError};
+    pub use super::secure_logging::{redact_sensitive_data, LogConfig, init_secure_logging};
+    pub use super::profiling::{TimingGuard, PerformanceThresholds, PerformanceMetrics};
     pub use chrono::{DateTime, Utc};
     pub use uuid::Uuid;
 }
@@ -34,7 +41,8 @@ mod tests {
         cfg.dbname = Some("jamey_test".to_string());
         cfg.user = Some("jamey".to_string());
         cfg.password = Some("test_password".to_string());
-
+        log::info!("Connecting to test database with configured credentials");
+        
         let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls)
             .map_err(|e| format!("Failed to create connection pool: {}", e))?;
         let store = PostgresMemoryStore::new(pool, 1536).await?;
@@ -68,12 +76,12 @@ mod tests {
         assert_eq!(retrieved.memory_type, memory.memory_type);
 
         // Search
-        let results = store.search(vec![0.1; 1536], 1).await?;
+        let results = store.search(&vec![0.1; 1536], 1).await?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, id);
 
         // Update
-        store.update(id, "Updated content".to_string(), vec![0.2; 1536]).await?;
+        store.update(id, "Updated content", &vec![0.2; 1536]).await?;
         let updated = store.retrieve(id).await?;
         assert_eq!(updated.content, "Updated content");
 
