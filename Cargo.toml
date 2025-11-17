@@ -82,7 +82,7 @@ dirs = "5.0"
 
 # TUI Dependencies
 ratatui = { version = "0.23", features = ["all-widgets"] }
-tui-textarea = "0.2"
+tui-textarea = "0.7"
 arboard = "3.2"
 
 # Caching Dependencies
