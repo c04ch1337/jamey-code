@@ -33,7 +33,7 @@ url = "2.5"
 rumqttc = "0.21"
 
 # mDNS for device discovery
-mdns-sd = "0.6"
+mdns-sd = "0.17"
 
 # TLS support for mTLS in MQTT
 rustls.workspace = true
