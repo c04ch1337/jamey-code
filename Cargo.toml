@@ -54,7 +54,7 @@ base64 = { version = "0.21", features = ["std"] }
 rustls = "0.21"
 tokio-rustls = "0.24"
 rustls-pemfile = "1.0"
-webpki-roots = "0.25"
+webpki-roots = "1.0"
 
 
 # Scheduling
