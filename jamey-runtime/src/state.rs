@@ -33,8 +33,33 @@ pub struct SessionManager {
 #[derive(Debug, Clone)]
 pub struct Session {
     pub id: Uuid,
-    pub memory_context: Vec<Memory>,
+    pub memory_context: DashMap<Uuid, Memory>,
     pub last_activity: std::time::Instant,
+}
+
+impl Session {
+    fn new(id: Uuid) -> Self {
+        Self {
+            id,
+            memory_context: DashMap::new(),
+            last_activity: std::time::Instant::now(),
+        }
+    }
+
+    pub fn add_memory(&self, memory: Memory) {
+        self.memory_context.insert(memory.id, memory);
+    }
+
+    pub fn get_memory(&self, id: &Uuid) -> Option<Memory> {
+        self.memory_context.get(id).map(|m| (*m.value()).clone())
+    }
+
+    pub fn list_memories(&self) -> Vec<Memory> {
+        self.memory_context
+            .iter()
+            .map(|m| (*m.value()).clone())
+            .collect()
+    }
 }
 
 impl SessionManager {
@@ -47,14 +72,7 @@ impl SessionManager {
 
     pub fn create_session(&self) -> Uuid {
         let session_id = Uuid::new_v4();
-        self.sessions.insert(
-            session_id,
-            Session {
-                id: session_id,
-                memory_context: Vec::new(),
-                last_activity: std::time::Instant::now(),
-            },
-        );
+        self.sessions.insert(session_id, Session::new(session_id));
         session_id
     }
 
@@ -186,17 +204,14 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    async fn test_runtime_state() {
-        let temp_dir = TempDir::new().unwrap();
+    async fn test_runtime_state() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
         let mut config = RuntimeConfig::default();
         config.tools.backup_dir = temp_dir.path().to_path_buf();
         config.memory.postgres_password = "test_password".to_string();
         config.llm.openrouter_api_key = "test_key".to_string();
 
-        let state = RuntimeState::new(config).await;
-        assert!(state.is_ok());
-
-        let state = state.unwrap();
+        let state = RuntimeState::new(config).await?;
         
         // Test session management
         let session_id = state.session_manager.create_session();
@@ -208,6 +223,7 @@ mod tests {
 
         // Test shutdown
         state.shutdown().await;
+        Ok(())
     }
 
     #[tokio::test]

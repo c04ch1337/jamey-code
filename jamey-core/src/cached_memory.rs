@@ -45,21 +45,28 @@ impl CachedMemoryStore {
     pub async fn warm_cache(&self, limit: usize) -> Result<usize> {
         info!("Warming up cache with {} recent memories", limit);
         
-        // This would need to be implemented in PostgresMemoryStore
-        // For now, we'll return 0 as a placeholder
-        warn!("Cache warming not fully implemented yet");
-        Ok(0)
+        let dummy_embedding = vec![0.0; 1536];
+        let recent_memories = self.postgres_store.search(dummy_embedding, limit).await?;
+        
+        let mut cached_count = 0;
+        for memory in recent_memories {
+            if self.cache.cache_memory(&memory).await.is_ok() {
+                cached_count += 1;
+            }
+        }
+        
+        info!("Successfully cached {} memories", cached_count);
+        Ok(cached_count)
     }
 
     /// Get cache statistics
     pub async fn get_cache_stats(&self) -> Result<CacheStats> {
-        // This would require additional cache monitoring
-        // For now, return placeholder stats
+        let stats = self.cache.get_stats().await?;
         Ok(CacheStats {
-            memory_entries: 0,
-            search_entries: 0,
-            hit_rate: 0.0,
-            memory_usage_mb: 0.0,
+            memory_entries: stats.entries,
+            search_entries: stats.search_entries,
+            hit_rate: stats.hit_rate,
+            memory_usage_mb: stats.memory_usage_mb,
         })
     }
 }
@@ -111,11 +118,17 @@ impl MemoryStore for CachedMemoryStore {
     async fn search(&self, query_embedding: Vec<f32>, limit: usize) -> Result<Vec<Memory>> {
         debug!("Searching memories with caching, limit: {}", limit);
         
-        // Create a cache key for the search query
-        let query_key = format!("search:{:x}:{:x}", 
-            query_embedding.iter().take(8).map(|x| x.to_bits() as u64).sum::<u64>(),
-            limit
-        );
+        // Create a more robust cache key using multiple vector segments
+        let query_key = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for chunk in query_embedding.chunks(32) {
+                let chunk_hash = chunk.iter()
+                    .map(|x| x.to_bits() as u64)
+                    .fold(0, |acc, x| acc.wrapping_add(x));
+                hasher.write_u64(chunk_hash);
+            }
+            format!("search:{}:{}", hasher.finish(), limit)
+        };
         
         // Try cache first
         match self.cache.get_cached_search_results::<Vec<Memory>>(&query_key).await {
@@ -148,13 +161,21 @@ impl MemoryStore for CachedMemoryStore {
         // Update in PostgreSQL
         self.postgres_store.update(id, content.clone(), embedding.clone()).await?;
         
-        // Invalidate cache for this memory
-        if let Err(e) = self.invalidate_cache(id).await {
-            warn!("Failed to invalidate cache for memory {}: {}", id, e);
+        // Retrieve updated memory and update cache immediately
+        match self.postgres_store.retrieve(id).await {
+            Ok(updated_memory) => {
+                if let Err(e) = self.cache.cache_memory(&updated_memory).await {
+                    warn!("Failed to update cache for memory {}: {}", id, e);
+                }
+            }
+            Err(e) => {
+                warn!("Failed to retrieve updated memory for caching {}: {}", id, e);
+                // Fallback to cache invalidation
+                if let Err(e) = self.invalidate_cache(id).await {
+                    warn!("Failed to invalidate cache for memory {}: {}", id, e);
+                }
+            }
         }
-        
-        // Optionally, we could retrieve and cache the updated memory
-        // but for now, we'll let the next request cache it
         
         Ok(())
     }
@@ -237,9 +258,22 @@ impl AdvancedCachedMemoryStore {
                 });
             }
             InvalidationStrategy::Adaptive => {
-                // For adaptive, we could track access patterns and decide
-                // For now, use immediate invalidation
-                self.inner.invalidate_cache(id).await?;
+                let cache = self.inner.cache.clone();
+                let access_count = cache.get_access_count(id).await.unwrap_or(0);
+                
+                if access_count > 10 {
+                    // Frequently accessed items - update instead of invalidate
+                    if let Ok(memory) = self.inner.postgres_store.retrieve(id).await {
+                        if let Err(e) = cache.cache_memory(&memory).await {
+                            warn!("Failed to update frequently accessed memory {}: {}", id, e);
+                            // Fallback to invalidation
+                            self.inner.invalidate_cache(id).await?;
+                        }
+                    }
+                } else {
+                    // Less frequently accessed - just invalidate
+                    self.inner.invalidate_cache(id).await?;
+                }
             }
             InvalidationStrategy::Manual => {
                 // Don't invalidate automatically
@@ -304,15 +338,16 @@ mod tests {
     use tokio_postgres::NoTls;
     use chrono::Utc;
 
-    async fn create_test_store() -> AdvancedCachedMemoryStore {
+    async fn create_test_store() -> Result<AdvancedCachedMemoryStore, Box<dyn std::error::Error>> {
         let mut cfg = Config::new();
         cfg.host = Some("localhost".to_string());
         cfg.dbname = Some("jamey_test".to_string());
         cfg.user = Some("jamey".to_string());
         cfg.password = Some("test_password".to_string());
 
-        let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls).unwrap();
-        let postgres_store = PostgresMemoryStore::new(pool, 1536).await.unwrap();
+        let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls)
+            .map_err(|e| format!("Failed to create connection pool: {}", e))?;
+        let postgres_store = PostgresMemoryStore::new(pool, 1536).await?;
         
         let cache_config = crate::cache::CacheConfig {
             redis_url: None,
@@ -321,16 +356,18 @@ mod tests {
             enable_fallback: false,
         };
 
-        AdvancedCachedMemoryStore::new(
+        let store = AdvancedCachedMemoryStore::new(
             postgres_store,
             cache_config,
             InvalidationStrategy::Immediate,
-        ).await.unwrap()
+        ).await?;
+        
+        Ok(store)
     }
 
     #[tokio::test]
-    async fn test_cached_memory_store() {
-        let store = create_test_store().await;
+    async fn test_cached_memory_store() -> Result<(), Box<dyn std::error::Error>> {
+        let store = create_test_store().await?;
         
         let memory = Memory {
             id: Uuid::new_v4(),
@@ -343,30 +380,31 @@ mod tests {
         };
 
         // Store memory
-        let id = store.store(memory.clone()).await.unwrap();
+        let id = store.store(memory.clone()).await?;
         
         // Retrieve (should hit cache on second call)
-        let retrieved1 = store.retrieve(id).await.unwrap();
+        let retrieved1 = store.retrieve(id).await?;
         assert_eq!(retrieved1.content, memory.content);
         
-        let retrieved2 = store.retrieve(id).await.unwrap();
+        let retrieved2 = store.retrieve(id).await?;
         assert_eq!(retrieved2.content, memory.content);
         
         // Update memory
-        store.update(id, "Updated content".to_string(), vec![0.2; 1536]).await.unwrap();
+        store.update(id, "Updated content".to_string(), vec![0.2; 1536]).await?;
         
         // Retrieve updated memory
-        let updated = store.retrieve(id).await.unwrap();
+        let updated = store.retrieve(id).await?;
         assert_eq!(updated.content, "Updated content");
         
         // Delete memory
-        store.delete(id).await.unwrap();
+        store.delete(id).await?;
         assert!(store.retrieve(id).await.is_err());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_invalidation_strategies() {
-        let store = create_test_store().await;
+    async fn test_invalidation_strategies() -> Result<(), Box<dyn std::error::Error>> {
+        let store = create_test_store().await?;
         
         let memory = Memory {
             id: Uuid::new_v4(),
@@ -378,12 +416,13 @@ mod tests {
             last_accessed: Utc::now(),
         };
 
-        let id = store.store(memory.clone()).await.unwrap();
+        let id = store.store(memory.clone()).await?;
         
         // Test manual invalidation
-        store.manual_invalidate(id).await.unwrap();
+        store.manual_invalidate(id).await?;
         
         // Clear all cache
-        store.clear_all_cache().await.unwrap();
+        store.clear_all_cache().await?;
+        Ok(())
     }
 }

@@ -129,21 +129,21 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    async fn test_runtime_lifecycle() {
-        let temp_dir = TempDir::new().unwrap();
+    async fn test_runtime_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
         let mut config = RuntimeConfig::default();
         config.tools.backup_dir = temp_dir.path().to_path_buf();
         config.memory.postgres_password = "test_password".to_string();
         config.llm.openrouter_api_key = "test_key".to_string();
 
         // Create runtime
-        let mut runtime = Runtime::new(config).await.unwrap();
+        let mut runtime = Runtime::new(config).await?;
         
         // Start runtime in background
         let runtime_handle = tokio::spawn({
             let mut runtime = runtime;
             async move {
-                runtime.run().await.unwrap();
+                runtime.run().await.expect("Runtime should run successfully");
             }
         });
 
@@ -156,22 +156,24 @@ mod tests {
 
         // Shutdown runtime
         runtime.shutdown().await;
-        runtime_handle.await.unwrap();
+        runtime_handle.await?;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_runtime_config_validation() {
+    async fn test_runtime_config_validation() -> Result<(), Box<dyn std::error::Error>> {
         // Test invalid config
         let mut config = RuntimeConfig::default();
         config.project_name = "".to_string();
         assert!(Runtime::new(config).await.is_err());
 
         // Test valid config
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new()?;
         let mut config = RuntimeConfig::default();
         config.tools.backup_dir = temp_dir.path().to_path_buf();
         config.memory.postgres_password = "test_password".to_string();
         config.llm.openrouter_api_key = "test_key".to_string();
         assert!(Runtime::new(config).await.is_ok());
+        Ok(())
     }
 }

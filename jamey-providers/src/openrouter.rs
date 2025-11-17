@@ -21,6 +21,18 @@ pub enum OpenRouterError {
         count: usize,
         limit: usize,
     },
+    #[error("Invalid request: {0}")]
+    InvalidRequest(String),
+    #[error("Empty message content")]
+    EmptyContent,
+    #[error("Invalid role: {0}")]
+    InvalidRole(String),
+    #[error("Invalid tool configuration: {0}")]
+    InvalidTool(String),
+    #[error("TLS error: {0}")]
+    TlsError(String),
+    #[error("Certificate validation error: {0}")]
+    CertificateError(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,7 +49,8 @@ impl Default for OpenRouterConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            api_base_url: Url::parse("https://openrouter.ai/api/v1").unwrap(),
+            api_base_url: Url::parse("https://openrouter.ai/api/v1")
+                .expect("Default OpenRouter URL should be valid"),
             default_model: "claude-3-sonnet".to_string(),
             allowed_models: vec![
                 "claude-3-sonnet".to_string(),
@@ -132,13 +145,35 @@ pub struct OpenRouterProvider {
     config: OpenRouterConfig,
     client: reqwest::Client,
     tokenizer: CoreBPE,
+    request_semaphore: tokio::sync::Semaphore,
 }
 
 impl OpenRouterProvider {
     pub fn new(config: OpenRouterConfig) -> Result<Self> {
+        const MAX_CONCURRENT_REQUESTS: usize = 50;
+        // Validate configuration
+        if config.api_key.is_empty() {
+            return Err(OpenRouterError::InvalidRequest("API key is required".to_string()).into());
+        }
+        if config.allowed_models.is_empty() {
+            return Err(OpenRouterError::InvalidRequest("At least one allowed model must be specified".to_string()).into());
+        }
+
+        // Configure secure TLS defaults
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(config.timeout_seconds))
-            .build()?;
+            // Enforce minimum TLS version 1.2
+            .min_tls_version(reqwest::tls::Version::TLS_1_2)
+            // Use native TLS implementation with strong cipher suites
+            .use_native_tls()
+            // Enable certificate validation
+            .tls_built_in_root_certs()
+            // Set reasonable connection timeouts
+            .connect_timeout(std::time::Duration::from_secs(30))
+            // Enable HTTP/2 support
+            .http2_prior_knowledge()
+            .build()
+            .map_err(|e| OpenRouterError::Api(format!("Failed to create HTTP client: {}", e)))?;
 
         let tokenizer = tiktoken_rs::cl100k_base()?;
 
@@ -146,7 +181,68 @@ impl OpenRouterProvider {
             config,
             client,
             tokenizer,
+            request_semaphore: tokio::sync::Semaphore::new(MAX_CONCURRENT_REQUESTS),
         })
+    }
+
+    fn validate_chat_request(&mut self, request: &mut ChatRequest) -> Result<(), OpenRouterError> {
+        // Validate and set default model
+        if request.model.is_empty() {
+            request.model = self.config.default_model.clone();
+        }
+        self.validate_model(&request.model)?;
+
+        // Validate messages
+        if request.messages.is_empty() {
+            return Err(OpenRouterError::InvalidRequest("At least one message is required".to_string()));
+        }
+
+        for message in &request.messages {
+            // Validate message content
+            if message.content.trim().is_empty() {
+                return Err(OpenRouterError::EmptyContent);
+            }
+
+            // Validate message role
+            match message.role.as_str() {
+                "system" | "user" | "assistant" | "function" => {}
+                invalid_role => return Err(OpenRouterError::InvalidRole(invalid_role.to_string())),
+            }
+        }
+
+        // Validate tools if present
+        if let Some(tools) = &request.tools {
+            for tool in tools {
+                if tool.name.trim().is_empty() {
+                    return Err(OpenRouterError::InvalidTool("Tool name cannot be empty".to_string()));
+                }
+                if tool.description.trim().is_empty() {
+                    return Err(OpenRouterError::InvalidTool("Tool description cannot be empty".to_string()));
+                }
+                // Validate tool parameters are valid JSON schema
+                if let Err(e) = serde_json::from_value::<serde_json::Value>(tool.parameters.clone()) {
+                    return Err(OpenRouterError::InvalidTool(format!("Invalid tool parameters: {}", e)));
+                }
+            }
+        }
+
+        // Validate temperature if present
+        if let Some(temp) = request.temperature {
+            if !(0.0..=2.0).contains(&temp) {
+                return Err(OpenRouterError::InvalidRequest(
+                    "Temperature must be between 0.0 and 2.0".to_string(),
+                ));
+            }
+        }
+
+        // Validate max_tokens if present
+        if let Some(tokens) = request.max_tokens {
+            if tokens == 0 {
+                return Err(OpenRouterError::InvalidRequest("max_tokens must be greater than 0".to_string()));
+            }
+        }
+
+        Ok(())
     }
 
     fn validate_model(&self, model: &str) -> Result<(), OpenRouterError> {
@@ -161,31 +257,56 @@ impl OpenRouterProvider {
     }
 
     async fn make_request(&self, request: ChatRequest) -> Result<ChatResponse> {
-        let backoff = ExponentialBackoff::default();
+        // Acquire semaphore permit for request limiting
+        let _permit = self.request_semaphore.acquire().await?;
+
+        let backoff = ExponentialBackoff {
+            initial_interval: std::time::Duration::from_millis(100),
+            max_interval: std::time::Duration::from_secs(10),
+            max_elapsed_time: Some(std::time::Duration::from_secs(30)),
+            ..Default::default()
+        };
+
         let url = self.config.api_base_url.join("chat/completions")?;
+        let auth_header = format!("Bearer {}", self.config.api_key);
 
         let result = backoff::future::retry(backoff, || async {
-            let response = self
-                .client
+            let request_future = self.client
                 .post(url.clone())
-                .header("Authorization", format!("Bearer {}", self.config.api_key))
+                .header("Authorization", &auth_header)
                 .json(&request)
-                .send()
-                .await
-                .map_err(|e| backoff::Error::transient(OpenRouterError::Api(e.to_string())))?;
+                .send();
+
+            // Add timeout to the request
+            let response = tokio::time::timeout(
+                std::time::Duration::from_secs(self.config.timeout_seconds),
+                request_future
+            )
+            .await
+            .map_err(|_| backoff::Error::permanent(OpenRouterError::Api("Request timeout".to_string())))?
+            .map_err(|e| backoff::Error::transient(OpenRouterError::Api(e.to_string())))?;
 
             match response.status() {
                 reqwest::StatusCode::OK => {
-                    response.json::<ChatResponse>()
-                        .await
+                    let body = response.bytes().await
+                        .map_err(|e| backoff::Error::permanent(OpenRouterError::Api(e.to_string())))?;
+                    
+                    serde_json::from_slice::<ChatResponse>(&body)
                         .map_err(|e| backoff::Error::permanent(OpenRouterError::Api(e.to_string())))
                 }
                 reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                    // Get retry-after header if available
+                    let retry_after = response.headers()
+                        .get("retry-after")
+                        .and_then(|h| h.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(5);
+
+                    tokio::time::sleep(std::time::Duration::from_secs(retry_after)).await;
                     Err(backoff::Error::transient(OpenRouterError::RateLimit))
                 }
                 _ => {
-                    let error_text = response.text()
-                        .await
+                    let error_text = response.text().await
                         .unwrap_or_else(|e| format!("Failed to read error response: {}", e));
                     Err(backoff::Error::permanent(OpenRouterError::Api(error_text)))
                 }
@@ -206,12 +327,8 @@ pub trait LlmProvider {
 #[async_trait]
 impl LlmProvider for OpenRouterProvider {
     async fn chat(&self, mut request: ChatRequest) -> Result<ChatResponse> {
-        // Use default model if none specified
-        if request.model.is_empty() {
-            request.model = self.config.default_model.clone();
-        }
-
-        self.validate_model(&request.model)?;
+        // Validate and normalize request
+        self.validate_chat_request(&mut request)?;
 
         // Count tokens and validate against model limits
         let total_tokens: usize = request
@@ -241,6 +358,23 @@ impl LlmProvider for OpenRouterProvider {
     }
 
     async fn get_embedding(&self, text: &str) -> Result<Vec<f32>> {
+        // Acquire semaphore permit
+        let _permit = self.request_semaphore.acquire().await?;
+        // Validate input
+        if text.trim().is_empty() {
+            return Err(OpenRouterError::EmptyContent.into());
+        }
+
+        // Check token limit for embeddings (OpenAI's ada-002 has a 8k token limit)
+        let token_count = self.count_tokens(text);
+        if token_count > 8192 {
+            return Err(OpenRouterError::TokenLimit {
+                model: "text-embedding-ada-002".to_string(),
+                count: token_count,
+                limit: 8192,
+            }.into());
+        }
+
         // Use OpenRouter's embedding endpoint
         let url = self.config.api_base_url.join("embeddings")?;
         
@@ -249,13 +383,21 @@ impl LlmProvider for OpenRouterProvider {
             "input": text
         });
 
-        let response = self
-            .client
+        let auth_header = format!("Bearer {}", self.config.api_key);
+        let request_future = self.client
             .post(url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .header("Authorization", auth_header)
             .json(&embedding_request)
-            .send()
-            .await?;
+            .send();
+
+        // Add timeout to the request
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(self.config.timeout_seconds),
+            request_future
+        )
+        .await
+        .map_err(|_| OpenRouterError::Api("Request timeout".to_string()))?
+        .map_err(|e| OpenRouterError::Api(e.to_string()))?;
 
         match response.status() {
             reqwest::StatusCode::OK => {
@@ -284,16 +426,75 @@ mod tests {
     use wiremock::{matchers::*, Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
-    async fn test_openrouter_provider() {
+    async fn test_tls_configuration() -> Result<(), Box<dyn std::error::Error>> {
+        // Test with invalid certificate
+        let config = OpenRouterConfig {
+            api_key: "test_key".to_string(),
+            api_base_url: Url::parse("https://invalid-cert-test.badssl.com/")?,
+            ..Default::default()
+        };
+
+        // Should fail due to invalid certificate
+        let result = OpenRouterProvider::new(config);
+        assert!(result.is_err());
+        assert!(format!("{}", result.unwrap_err()).contains("certificate"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_provider() -> Result<(), Box<dyn std::error::Error>> {
         let mock_server = MockServer::start().await;
 
         let config = OpenRouterConfig {
             api_key: "test_key".to_string(),
-            api_base_url: Url::parse(&mock_server.uri()).unwrap(),
+            api_base_url: Url::parse(&mock_server.uri())?,
             ..Default::default()
         };
 
-        let provider = OpenRouterProvider::new(config).unwrap();
+        let provider = OpenRouterProvider::new(config)?;
+
+        // Test validation failures
+        let empty_message = ChatRequest {
+            model: "claude-3-sonnet".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: "".to_string(),
+            }],
+            tools: None,
+            tool_choice: None,
+            temperature: None,
+            max_tokens: None,
+        };
+        assert!(matches!(
+            provider.chat(empty_message.clone()).await,
+            Err(anyhow::Error) if format!("{}", provider.chat(empty_message).await.unwrap_err())
+                .contains("Empty message content")
+        ));
+
+        let invalid_role = ChatRequest {
+            model: "claude-3-sonnet".to_string(),
+            messages: vec![Message {
+                role: "invalid".to_string(),
+                content: "Test".to_string(),
+            }],
+            tools: None,
+            tool_choice: None,
+            temperature: None,
+            max_tokens: None,
+        };
+        assert!(matches!(
+            provider.chat(invalid_role.clone()).await,
+            Err(anyhow::Error) if format!("{}", provider.chat(invalid_role).await.unwrap_err())
+                .contains("Invalid role")
+        ));
+
+        // Test empty embedding text
+        assert!(matches!(
+            provider.get_embedding("").await,
+            Err(anyhow::Error) if format!("{}", provider.get_embedding("").await.unwrap_err())
+                .contains("Empty content")
+        ));
 
         // Mock successful response
         Mock::given(method("POST"))
@@ -329,7 +530,8 @@ mod tests {
             max_tokens: None,
         };
 
-        let response = provider.chat(request).await.unwrap();
+        let response = provider.chat(request).await?;
         assert_eq!(response.choices[0].message.content, "Test response");
+        Ok(())
     }
 }

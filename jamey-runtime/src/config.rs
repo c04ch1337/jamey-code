@@ -163,19 +163,55 @@ impl Default for ToolConfig {
 
 impl RuntimeConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
+        // Load .env file if it exists, but don't fail if it doesn't
         dotenv::dotenv().ok();
 
-        let default_config = config::Config::try_from(&Self::default())?;
-        let env_config = config::Environment::default().separator("__");
+        // Load required environment variables
+        let postgres_password = std::env::var("POSTGRES_PASSWORD")
+            .map_err(|_| ConfigError::MissingConfig("POSTGRES_PASSWORD".to_string()))?;
         
-        let config = config::Config::builder()
-            // Add defaults
-            .add_source(default_config)
-            // Override with environment variables
-            .add_source(env_config)
-            .build()?;
+        let openrouter_api_key = std::env::var("OPENROUTER_API_KEY")
+            .map_err(|_| ConfigError::MissingConfig("OPENROUTER_API_KEY".to_string()))?;
 
-        config.try_deserialize().map_err(ConfigError::Loading)
+        let api_key = if std::env::var("API_KEY_REQUIRED").unwrap_or_else(|_| "true".to_string()) == "true" {
+            Some(std::env::var("API_KEY")
+                .map_err(|_| ConfigError::MissingConfig("API_KEY is required when API_KEY_REQUIRED=true".to_string()))?)
+        } else {
+            None
+        };
+
+        // Create base config from defaults
+        let mut config = Self::default();
+
+        // Update with required values
+        config.memory.postgres_password = postgres_password;
+        config.llm.openrouter_api_key = openrouter_api_key;
+        config.security.api_key = api_key;
+        config.security.api_key_required = std::env::var("API_KEY_REQUIRED")
+            .map(|v| v == "true")
+            .unwrap_or(true);
+
+        // Load optional environment variables
+        if let Ok(host) = std::env::var("POSTGRES_HOST") {
+            config.memory.postgres_host = host;
+        }
+        if let Ok(port) = std::env::var("POSTGRES_PORT").and_then(|p| p.parse().map_err(|_| std::env::VarError::NotPresent)) {
+            config.memory.postgres_port = port;
+        }
+        if let Ok(db) = std::env::var("POSTGRES_DB") {
+            config.memory.postgres_db = db;
+        }
+        if let Ok(user) = std::env::var("POSTGRES_USER") {
+            config.memory.postgres_user = user;
+        }
+        if let Ok(max_conn) = std::env::var("POSTGRES_MAX_CONNECTIONS").and_then(|m| m.parse().map_err(|_| std::env::VarError::NotPresent)) {
+            config.memory.postgres_max_connections = max_conn;
+        }
+
+        // Validate the configuration
+        config.validate()?;
+
+        Ok(config)
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
@@ -206,15 +242,16 @@ impl RuntimeConfig {
         Ok(())
     }
 
-    pub fn into_openrouter_config(&self) -> OpenRouterConfig {
-        OpenRouterConfig {
+    pub fn into_openrouter_config(&self) -> Result<OpenRouterConfig, ConfigError> {
+        Ok(OpenRouterConfig {
             api_key: self.llm.openrouter_api_key.clone(),
-            api_base_url: url::Url::parse("https://openrouter.ai/api/v1").unwrap(),
+            api_base_url: url::Url::parse("https://openrouter.ai/api/v1")
+                .map_err(|_| ConfigError::InvalidValue("Invalid OpenRouter API URL".to_string()))?,
             default_model: self.llm.openrouter_default_model.clone(),
             allowed_models: self.llm.openrouter_allowed_models.clone(),
             timeout_seconds: self.llm.openrouter_timeout_seconds,
             max_retries: self.llm.openrouter_max_retries,
-        }
+        })
     }
 }
 

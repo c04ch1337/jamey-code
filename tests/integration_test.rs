@@ -1,12 +1,18 @@
+mod fixtures;
+mod helpers;
+mod mocks;
+mod utils;
+
 use anyhow::Result;
-use jamey_core::memory::{Memory, MemoryType};
 use jamey_providers::openrouter::{ChatRequest, Message};
 use jamey_runtime::prelude::*;
 use jamey_tools::system::ProcessInfo;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio;
-use uuid::Uuid;
+
+use fixtures::TestMemories;
+use utils::{assert_memories_equal, wait_for_condition};
 
 async fn setup_test_runtime() -> Result<(Runtime, TempDir)> {
     let temp_dir = TempDir::new()?;
@@ -30,15 +36,8 @@ async fn test_memory_llm_integration() -> Result<()> {
     let state = runtime.state();
 
     // Create a memory entry
-    let memory = Memory {
-        id: Uuid::new_v4(),
-        memory_type: MemoryType::Conversation,
-        content: "Test conversation memory".to_string(),
-        embedding: vec![0.1; 1536],
-        metadata: serde_json::json!({"source": "integration_test"}),
-        created_at: chrono::Utc::now(),
-        last_accessed: chrono::Utc::now(),
-    };
+    let memories = TestMemories::default();
+    let memory = memories.conversation.clone();
 
     let memory_id = state.memory_store.store(memory.clone()).await?;
 
@@ -109,15 +108,8 @@ async fn test_session_management() -> Result<()> {
     assert!(session.is_some());
 
     // Add memory to session context
-    let memory = Memory {
-        id: Uuid::new_v4(),
-        memory_type: MemoryType::Conversation,
-        content: "Session test memory".to_string(),
-        embedding: vec![0.1; 1536],
-        metadata: serde_json::json!({}),
-        created_at: chrono::Utc::now(),
-        last_accessed: chrono::Utc::now(),
-    };
+    let memories = TestMemories::default();
+    let memory = memories.conversation.clone();
 
     let memory_id = state.memory_store.store(memory).await?;
     let mut session = session.unwrap();
@@ -125,12 +117,17 @@ async fn test_session_management() -> Result<()> {
         state.memory_store.retrieve(memory_id).await?
     );
 
-    // Test session cleanup
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    state.session_manager.cleanup_expired_sessions(
-        std::time::Duration::from_millis(50)
-    );
-    assert!(state.session_manager.get_session(session_id).is_none());
+    // Test session cleanup with retry
+    let cleanup_duration = std::time::Duration::from_millis(50);
+    state.session_manager.cleanup_expired_sessions(cleanup_duration);
+    
+    let session_cleaned = wait_for_condition(
+        || state.session_manager.get_session(session_id).is_none(),
+        std::time::Duration::from_millis(200),
+        std::time::Duration::from_millis(20)
+    ).await;
+    
+    assert!(session_cleaned, "Session was not cleaned up after timeout");
 
     Ok(())
 }

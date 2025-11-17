@@ -53,16 +53,16 @@ mod tests {
     use wiremock::{matchers::*, Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
-    async fn test_provider_integration() {
+    async fn test_provider_integration() -> Result<(), Box<dyn std::error::Error>> {
         let mock_server = MockServer::start().await;
 
         let config = OpenRouterConfig {
             api_key: "test_key".to_string(),
-            api_base_url: Url::parse(&mock_server.uri()).unwrap(),
+            api_base_url: Url::parse(&mock_server.uri())?,
             ..Default::default()
         };
 
-        let provider = OpenRouterProvider::new(config).unwrap();
+        let provider = OpenRouterProvider::new(config)?;
 
         // Mock successful chat response
         Mock::given(method("POST"))
@@ -99,11 +99,12 @@ mod tests {
             max_tokens: None,
         };
 
-        let response = provider.chat(request).await.unwrap();
+        let response = provider.chat(request).await?;
         assert_eq!(response.choices[0].message.content, "Test response");
 
         // Test embedding functionality
-        let embedding = provider.get_embedding("Test text").await.unwrap();
+        let embedding = provider.get_embedding("Test text").await?;
         assert_eq!(embedding.len(), 1536); // Expected embedding dimension
+        Ok(())
     }
 }

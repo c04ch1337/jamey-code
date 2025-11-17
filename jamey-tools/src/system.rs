@@ -49,12 +49,15 @@ impl ProcessTool {
         self.system
             .processes()
             .values()
-            .map(|process| ProcessInfo {
-                pid: process.pid().as_u32(),
-                name: process.name().to_string(),
-                cpu_usage: process.cpu_usage(),
-                memory_usage: process.memory(),
-                start_time: DateTime::from(SystemTime::now()), // Placeholder - actual start time if available
+            .map(|process| {
+                let name = process.name();
+                ProcessInfo {
+                    pid: process.pid().as_u32(),
+                    name: name.into(),
+                    cpu_usage: process.cpu_usage(),
+                    memory_usage: process.memory(),
+                    start_time: DateTime::from(SystemTime::now()), // Placeholder - actual start time if available
+                }
             })
             .collect()
     }
@@ -114,7 +117,7 @@ impl RegistryTool {
             );
 
             if result != WIN32_ERROR(0) {
-                return Err(SystemToolError::Registry(format!("Failed to open registry key: {}", result.0)));
+                return Err(SystemToolError::Registry(format!("Failed to open registry key: {:#x}", result.0)));
             }
 
             let mut buffer = [0u16; 1024];
@@ -135,7 +138,7 @@ impl RegistryTool {
             RegCloseKey(key_handle);
 
             if query_result != WIN32_ERROR(0) {
-                return Err(SystemToolError::Registry(format!("Failed to query registry value: {}", query_result.0)));
+                return Err(SystemToolError::Registry(format!("Failed to query registry value: {:#x}", query_result.0)));
             }
 
             let string_len = (size as usize / 2).min(buffer.len());
@@ -171,15 +174,15 @@ impl SelfModifyTool {
             .file_name()
             .ok_or_else(|| SystemToolError::FileOperation("Invalid file path".to_string()))?;
 
-        let backup_name = format!(
-            "{}.{}.bak",
-            file_name.to_string_lossy(),
-            timestamp.format("%Y%m%d_%H%M%S")
-        );
+        let backup_name = {
+            let file_str = file_name.to_string_lossy();
+            let time_str = timestamp.format("%Y%m%d_%H%M%S");
+            format!("{file_str}.{time_str}.bak")
+        };
         let backup_path = self.backup_dir.join(backup_name);
 
         fs::copy(file_path, &backup_path).map_err(|e| {
-            SystemToolError::Backup(format!("Failed to create backup: {}", e))
+            SystemToolError::Backup(format!("Failed to create backup: {e}"))
         })?;
 
         Ok(FileBackup {
@@ -197,7 +200,7 @@ impl SelfModifyTool {
         let backup = self.create_backup(&file_path)?;
 
         fs::write(&file_path, new_content).map_err(|e| {
-            SystemToolError::FileOperation(format!("Failed to write file: {}", e))
+            SystemToolError::FileOperation(format!("Failed to write file: {e}"))
         })?;
 
         Ok(backup)
@@ -205,7 +208,7 @@ impl SelfModifyTool {
 
     pub fn restore_backup(&self, backup: &FileBackup) -> Result<(), SystemToolError> {
         fs::copy(&backup.backup_path, &backup.original_path).map_err(|e| {
-            SystemToolError::Backup(format!("Failed to restore backup: {}", e))
+            SystemToolError::Backup(format!("Failed to restore backup: {e}"))
         })?;
 
         Ok(())
@@ -213,7 +216,7 @@ impl SelfModifyTool {
 
     pub fn list_source_files(&self, pattern: &str) -> Result<Vec<PathBuf>, SystemToolError> {
         glob::glob(pattern)
-            .map_err(|e| SystemToolError::FileOperation(format!("Invalid glob pattern: {}", e)))?
+            .map_err(|e| SystemToolError::FileOperation(format!("Invalid glob pattern: {e}")))?
             .filter_map(Result::ok)
             .collect::<Vec<_>>()
             .into_iter()

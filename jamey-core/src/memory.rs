@@ -55,8 +55,8 @@ pub struct Memory {
 pub trait MemoryStore {
     async fn store(&self, memory: Memory) -> Result<Uuid>;
     async fn retrieve(&self, id: Uuid) -> Result<Memory>;
-    async fn search(&self, query_embedding: Vec<f32>, limit: usize) -> Result<Vec<Memory>>;
-    async fn update(&self, id: Uuid, content: String, embedding: Vec<f32>) -> Result<()>;
+    async fn search(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<Memory>>;
+    async fn update(&self, id: Uuid, content: &str, embedding: &[f32]) -> Result<()>;
     async fn delete(&self, id: Uuid) -> Result<()>;
 }
 
@@ -167,8 +167,10 @@ impl MemoryStore for PostgresMemoryStore {
             .trim_start_matches('[')
             .trim_end_matches(']')
             .split(',')
-            .map(|s| s.trim().parse().unwrap_or(0.0))
-            .collect();
+            .map(|s| s.trim().parse::<f32>().map_err(|e| {
+                anyhow::anyhow!("Failed to parse embedding value: {}", e)
+            }))
+            .collect::<Result<Vec<f32>>>()?;
 
         let memory_type_str: String = row.get("memory_type");
         let memory_type = match memory_type_str.as_str() {
@@ -191,14 +193,14 @@ impl MemoryStore for PostgresMemoryStore {
         })
     }
 
-    async fn search(&self, query_embedding: Vec<f32>, limit: usize) -> Result<Vec<Memory>> {
-        self.validate_vector_dimension(&query_embedding)?;
+    async fn search(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<Memory>> {
+        self.validate_vector_dimension(query_embedding)?;
         let client = self.pool.get().await?;
 
         // Convert query embedding to string format
-        let query_embedding_str = format!("[{}]", 
+        let query_embedding_str = format!("[{}]",
             query_embedding.iter()
-                .map(|v| v.to_string())
+                .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(",")
         );
@@ -222,8 +224,10 @@ impl MemoryStore for PostgresMemoryStore {
                 .trim_start_matches('[')
                 .trim_end_matches(']')
                 .split(',')
-                .map(|s| s.trim().parse().unwrap_or(0.0))
-                .collect();
+                .map(|s| s.trim().parse::<f32>().map_err(|e| {
+                    anyhow::anyhow!("Failed to parse embedding value: {}", e)
+                }))
+                .collect::<Result<Vec<f32>>>()?;
             
             let memory_type_str: String = row.get("memory_type");
             let memory_type = match memory_type_str.as_str() {
@@ -249,14 +253,14 @@ impl MemoryStore for PostgresMemoryStore {
         Ok(memories)
     }
 
-    async fn update(&self, id: Uuid, content: String, embedding: Vec<f32>) -> Result<()> {
-        self.validate_vector_dimension(&embedding)?;
+    async fn update(&self, id: Uuid, content: &str, embedding: &[f32]) -> Result<()> {
+        self.validate_vector_dimension(embedding)?;
         let client = self.pool.get().await?;
 
         // Convert embedding to string format
-        let embedding_str = format!("[{}]", 
+        let embedding_str = format!("[{}]",
             embedding.iter()
-                .map(|v| v.to_string())
+                .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(",")
         );
@@ -335,7 +339,7 @@ mod tests {
 
         // Test updating
         store
-            .update(id, "Updated content".to_string(), vec![0.0; 1536])
+            .update(id, "Updated content", &vec![0.0; 1536])
             .await
             .unwrap();
 
