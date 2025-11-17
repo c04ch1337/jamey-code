@@ -36,7 +36,7 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 once_cell = "1.18"  # Lazy statics
 tower = { version = "0.4", features = ["limit"] }  # Rate limiting
 metrics = "0.21"  # Runtime metrics
-metrics-exporter-prometheus = "0.12"
+metrics-exporter-prometheus = "0.17"
 
 # TLS/HTTPS Support
 rustls.workspace = true
